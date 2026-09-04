@@ -1,0 +1,51 @@
+# AliBeka acceptance tests
+
+## Test 1 - Quick-record a bale and create draft pieces [sanity]
+Viewport: mobile
+Covers: quick bale intake, category counts, draft creation and persistence.
+Steps:
+1. Open Receive & prepare → Receive bale.
+2. Enter purchase date, purchase price and supplier.
+3. Enter counts across categories and create category drafts.
+4. Open Stock and filter to Needs details.
+Expected: the bale is recorded and one draft exists for every counted piece, grouped by category.
+
+## Test 2 - Complete a draft piece and attach a photo
+Viewport: mobile
+Covers: draft completion, availability transition and photo upload.
+Steps:
+1. Open a draft piece.
+2. Enter name/category/size/quality.
+3. Add a real image.
+4. Verify the editor remains open after the photo is saved.
+5. Save the piece.
+Expected: the editor does not close when the photo is added; the piece becomes available and the photo is visible in Stock.
+
+## Test 3 - Replace or remove an item photo
+Viewport: desktop
+Covers: photo replacement, deletion and immediate editor state.
+Steps:
+1. Open an available item with a photo.
+2. Replace the photo.
+3. Verify the same editor remains open and the new image is visible.
+4. Remove the photo.
+5. Verify the editor remains open and the image disappears immediately.
+6. Save/close and reopen the item.
+Expected: replacement and removal happen without navigating away; removal persists while category, size, quality and price remain unchanged.
+
+## Test 4 - Adjust a negotiated POS price quickly
+Viewport: mobile
+Covers: POS cart and negotiated sale price.
+Steps:
+1. Open Sell and add an item priced at KSh 1,000.
+2. Apply -100 then +50.
+Expected: actual sale price is KSh 950 while base price remains KSh 1,000.
+
+## Test 5 - Complete a sale and remove the item from available inventory
+Viewport: mobile
+Covers: checkout, payment and sold transition.
+Steps:
+1. Add an available item to the cart.
+2. Choose payment and select Cash.
+3. Return to Stock.
+Expected: the sale is recorded and the item is no longer available.
