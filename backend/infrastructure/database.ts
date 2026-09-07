@@ -22,19 +22,27 @@ function getClient(): NeonQueryFunction<false, false> {
 const PHOTO_KEYS = new Set(['photo_key', 'photoKey']);
 const BOOL_KEYS = new Set(['is_refund', 'isRefund']);
 
+// Extra camelCase → snake_case mappings for keys not auto-converted.
+const EXTRA_DB_KEYS: Record<string, string> = {
+    userId: 'user_id',
+    originalSaleId: 'original_sale_id',
+    saleId: 'sale_id',
+    itemId: 'item_id',
+    baleId: 'bale_id',
+    expenseDate: 'expense_date',
+    pinHash: 'pin_hash',
+    passwordHash: 'password_hash',
+    expiresAt: 'expires_at',
+};
+
 // Convert incoming camelCase keys to snake_case to match DB columns.
 function toDbRecord(record: Record<string, unknown>): Record<string, unknown> {
     const out: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(record)) {
-        // Convert camelCase to snake_case (only for known keys)
         let dbKey = key;
         if (PHOTO_KEYS.has(key)) dbKey = 'photo_key';
         else if (BOOL_KEYS.has(key)) dbKey = 'is_refund';
-        else if (key === 'originalSaleId') dbKey = 'original_sale_id';
-        else if (key === 'saleId') dbKey = 'sale_id';
-        else if (key === 'itemId') dbKey = 'item_id';
-        else if (key === 'baleId') dbKey = 'bale_id';
-        else if (key === 'expenseDate') dbKey = 'expense_date';
+        else if (EXTRA_DB_KEYS[key]) dbKey = EXTRA_DB_KEYS[key];
         out[dbKey] = value;
     }
     return out;
@@ -91,6 +99,18 @@ function toApiRecord<T = Record<string, any>>(row: T | null | undefined): T | nu
     if ('expense_date' in out) {
         out.expenseDate = out.expense_date;
     }
+    if ('user_id' in out) {
+        out.userId = out.user_id;
+    }
+    if ('pin_hash' in out) {
+        out.pinHash = out.pin_hash;
+    }
+    if ('password_hash' in out) {
+        out.passwordHash = out.password_hash;
+    }
+    if ('expires_at' in out) {
+        out.expiresAt = typeof out.expires_at === 'string' ? out.expires_at : (out.expires_at as Date)?.toISOString?.() ?? out.expires_at;
+    }
     return out as T;
 }
 
@@ -104,7 +124,7 @@ function quoteIdent(ident: string): string {
 const ALLOWED_TABLES = new Set([
     'items', 'bales', 'price_rules', 'sales', 'sale_items',
     'meta', 'categories', 'qualities', 'entity_subscriptions', 'expenses',
-    'expense_categories',
+    'expense_categories', 'users', 'sessions', 'password_resets',
 ]);
 
 function validateTable(table: string): void {
@@ -223,6 +243,10 @@ export const database: Database = {
             delete (dbRecord as Record<string, unknown>).isRefund;
             delete (dbRecord as Record<string, unknown>).originalSaleId;
             delete (dbRecord as Record<string, unknown>).photoKey;
+            delete (dbRecord as Record<string, unknown>).userId;
+            delete (dbRecord as Record<string, unknown>).pinHash;
+            delete (dbRecord as Record<string, unknown>).passwordHash;
+            delete (dbRecord as Record<string, unknown>).expiresAt;
             const columns = Object.keys(dbRecord);
             if (!columns.length) {
                 results.push(false);

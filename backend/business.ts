@@ -1,5 +1,13 @@
 import { database } from './infrastructure/database';
 import { objectStorage } from './infrastructure/storage';
+import {
+    generateToken,
+    generatePin,
+    hashPassword,
+    hashPin,
+    verifyPassword,
+    verifyPin,
+} from './infrastructure/auth';
 
 type R = Record<string, unknown>;
 
@@ -14,7 +22,25 @@ const tables = {
     qualities: 'qualities',
     expenses: 'expenses',
     expenseCategories: 'expense_categories',
+    users: 'users',
+    sessions: 'sessions',
+    passwordResets: 'password_resets',
 };
+
+const SESSION_DURATION_DAYS = 30;
+const PASSWORD_RESET_HOURS = 1;
+
+// Helper: compute session expiry timestamp
+function sessionExpiry(): string {
+    return new Date(Date.now() + SESSION_DURATION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+}
+
+// Helper: strip secret fields from a user record before returning to the client
+function publicUser(u: R) {
+    if (!u) return u;
+    const { pinHash, passwordHash, ...rest } = u as Record<string, unknown>;
+    return rest;
+}
 
 const seedCategories = ['Dresses', 'Pallazos', 'Sweatpants', 'Tops', 'Shirts', 'Trousers', 'Skirts'];
 const seedRules: Array<[string, string, number]> = [
@@ -65,7 +91,7 @@ async function ensureSeed() {
 
 export async function bootstrap() {
     await ensureSeed();
-    const [rawItems, bales, rules, sales, cats, qs, expenses, expenseCats] = await Promise.all([
+    const [rawItems, bales, rules, sales, cats, qs, expenses, expenseCats, users] = await Promise.all([
         list(tables.items),
         list(tables.bales),
         list(tables.rules),
@@ -74,11 +100,14 @@ export async function bootstrap() {
         list(tables.qualities),
         list(tables.expenses),
         list(tables.expenseCategories),
+        list(tables.users),
     ]);
     const items = await addPhotoUrls(rawItems);
     const categories = cats.filter((c) => c.active !== false).map((c) => String(c.name)).sort();
     const qualities = qs.filter((q) => q.active !== false).map((q) => String(q.name));
     return {
+        isSetup: users.length > 0,
+        users: users.filter((u) => u.active !== false).map(publicUser),
         items,
         bales,
         rules: rules.filter((r) => qualities.includes(String(r.quality)) && String(r.quality) !== 'Camera'),
@@ -438,7 +467,7 @@ export async function createRefund(body: R) {
 }
 
 // === Expense operations ===
-export async function createExpense(body: R) {
+export async function createExpense(body: R, userId?: string) {
     const description = String(body.description || '').trim();
     const category = String(body.category || '').trim();
     const amount = Number(body.amount);
@@ -451,18 +480,16 @@ export async function createExpense(body: R) {
     }
     if (!expenseDate) return { error: 'Date is required', status: 400 };
 
-    // Validate category exists in the user's category list
+    // Validate category exists in the expense_categories list
     const { items: cats } = await database.list<R>(tables.expenseCategories, { filter: { active: true } });
     if (!cats.some((c) => String(c.name).toLowerCase() === category.toLowerCase())) {
         return { error: `"${category}" is not in your expense categories. Add it first.`, status: 400 };
     }
 
-    const [id] = await database.add(tables.expenses, [{
-        description,
-        category,
-        amount,
-        expenseDate,
-    }]);
+    const record: R = { description, category, amount, expenseDate };
+    if (userId) record.userId = userId;
+
+    const [id] = await database.add(tables.expenses, [record]);
     return id
         ? { data: { id }, status: 201 }
         : { error: 'Could not create expense', status: 500 };
@@ -578,4 +605,315 @@ export async function getPeriodReport(query: { from?: string; to?: string }) {
             topCategories,
         },
     };
+}
+
+// === Auth: session management ===
+
+export async function createSession(userId: string): Promise<string> {
+    const token = generateToken();
+    await database.add(tables.sessions, [{
+        id: token,
+        userId,
+        expiresAt: sessionExpiry(),
+    }]);
+    return token;
+}
+
+export async function deleteSession(sessionId: string): Promise<void> {
+    await database.delete(tables.sessions, [sessionId]);
+}
+
+// === Auth: login ===
+
+type AuthSuccess = { user: { id: string; name: string; email: string; role: string }; token: string };
+
+export async function login(body: R): Promise<{ data?: AuthSuccess; error?: string; status?: number }> {
+    const email = String(body.email || '').toLowerCase().trim();
+    const password = String(body.password || '');
+    const pin = String(body.pin || '');
+
+    if (!email) return { error: 'Email is required', status: 400 };
+    if (!password && !pin) return { error: 'Password or PIN is required', status: 400 };
+
+    const { items: users } = await database.list<R>(tables.users, {
+        filter: { email, active: true },
+        limit: 1,
+    });
+    const user = users[0];
+    if (!user) return { error: 'Invalid email or password', status: 401 };
+
+    // Verify password or PIN
+    const passwordHash = String(user.passwordHash || '');
+    const pinHash = String(user.pinHash || '');
+    const hasPassword = !!passwordHash;
+    const hasPin = !!pinHash;
+
+    if (password) {
+        if (!hasPassword) return { error: 'This account does not have a password set', status: 401 };
+        const valid = await verifyPassword(password, passwordHash);
+        if (!valid) return { error: 'Invalid email or password', status: 401 };
+    } else {
+        if (!hasPin) return { error: 'This account does not have a PIN set', status: 401 };
+        const valid = await verifyPin(pin, pinHash);
+        if (!valid) return { error: 'Invalid PIN', status: 401 };
+    }
+
+    const token = await createSession(String(user.id));
+    return {
+        data: {
+            user: {
+                id: String(user.id),
+                name: String(user.name),
+                email: String(user.email),
+                role: String(user.role),
+            },
+            token,
+        },
+    };
+}
+
+// === Auth: register first admin (first-run wizard) ===
+
+export async function registerFirstAdmin(body: R): Promise<{ data?: AuthSuccess; error?: string; status?: number }> {
+    const name = String(body.name || '').trim();
+    const email = String(body.email || '').toLowerCase().trim();
+    const password = String(body.password || '');
+    const confirm = String(body.confirmPassword || '');
+
+    if (!name) return { error: 'Name is required', status: 400 };
+    if (!email || !email.includes('@')) return { error: 'A valid email is required', status: 400 };
+    if (!password || password.length < 8) return { error: 'Password must be at least 8 characters', status: 400 };
+    if (password !== confirm) return { error: 'Passwords do not match', status: 400 };
+
+    // Check no users exist
+    const { items: existing } = await database.list<R>(tables.users, { limit: 1 });
+    if (existing.length > 0) {
+        return { error: 'A first admin already exists', status: 403 };
+    }
+
+    const passwordHash = await hashPassword(password);
+    const [id] = await database.add(tables.users, [{
+        name,
+        email,
+        passwordHash,
+        role: 'admin',
+        active: true,
+    }]);
+    if (!id) return { error: 'Could not create admin account', status: 500 };
+
+    const token = await createSession(String(id));
+    return {
+        data: {
+            user: { id: String(id), name, email, role: 'admin' },
+            token,
+        },
+    };
+}
+
+// === Auth: get current session ===
+
+export async function getSession(token?: string): Promise<{ user: R | null; isSetup: boolean }> {
+    if (!token) return { user: null, isSetup: false };
+    const { items: sessions } = await database.list<R>(tables.sessions, {
+        filter: { id: token },
+        limit: 1,
+    });
+    const session = sessions[0];
+    if (!session) return { user: null, isSetup: false };
+
+    // Check expiry
+    if (new Date(String(session.expiresAt)) < new Date()) {
+        await database.delete(tables.sessions, [String(session.id)]);
+        return { user: null, isSetup: false };
+    }
+
+    const { items: users } = await database.list<R>(tables.users, {
+        filter: { id: String(session.userId), active: true },
+        limit: 1,
+    });
+    const user = users[0];
+    if (!user) return { user: null, isSetup: false };
+
+    return {
+        user: {
+            id: String(user.id),
+            name: String(user.name),
+            email: String(user.email),
+            role: String(user.role),
+        },
+        isSetup: true,
+    };
+}
+
+// === Auth: change PIN ===
+
+export async function changePin(userId: string, newPin: string): Promise<{ error?: string; status?: number }> {
+    if (!/^\d{4,6}$/.test(newPin)) {
+        return { error: 'PIN must be 4 to 6 digits', status: 400 };
+    }
+    const pinHash = await hashPin(newPin);
+    await database.update(tables.users, [{
+        id: userId,
+        record: { pinHash },
+    }]);
+    return {};
+}
+
+// === Auth: change password ===
+
+export async function changePassword(
+    userId: string,
+    currentPw: string,
+    newPw: string
+): Promise<{ error?: string; status?: number }> {
+    if (!newPw || newPw.length < 8) {
+        return { error: 'New password must be at least 8 characters', status: 400 };
+    }
+    const { items: users } = await database.list<R>(tables.users, {
+        filter: { id: userId },
+        limit: 1,
+    });
+    const user = users[0];
+    if (!user) return { error: 'User not found', status: 404 };
+
+    const passwordHash = String(user.passwordHash || '');
+    if (passwordHash) {
+        const valid = await verifyPassword(currentPw, passwordHash);
+        if (!valid) return { error: 'Current password is incorrect', status: 401 };
+    }
+
+    const hash = await hashPassword(newPw);
+    await database.update(tables.users, [{ id: userId, record: { passwordHash: hash } }]);
+    return {};
+}
+
+// === Auth: request password reset ===
+
+export async function requestPasswordReset(email: string): Promise<{ error?: string; status?: number }> {
+    const { items: users } = await database.list<R>(tables.users, {
+        filter: { email: email.toLowerCase(), active: true },
+        limit: 1,
+    });
+    const user = users[0];
+    if (!user) {
+        // Don't reveal whether the email exists
+        return {};
+    }
+
+    // Generate a random token
+    const token = generateToken().replace(/[^a-zA-Z0-9]/g, '').slice(0, 48);
+    const expiresAt = new Date(Date.now() + PASSWORD_RESET_HOURS * 60 * 60 * 1000).toISOString();
+
+    await database.add(tables.passwordResets, [{
+        userId: String(user.id),
+        token,
+        expiresAt,
+        used: false,
+    }]);
+
+    // In dev, log the link to console. In production, send an email.
+    const resetUrl = `http://localhost:5180/reset-password?token=${token}`;
+    console.log(`[password-reset] Reset link for ${email}: ${resetUrl}`);
+    return {};
+}
+
+// === Auth: reset password with token ===
+
+export async function resetPassword(token: string, newPassword: string): Promise<{ error?: string; status?: number }> {
+    if (!newPassword || newPassword.length < 8) {
+        return { error: 'Password must be at least 8 characters', status: 400 };
+    }
+    const { items: resets } = await database.list<R>(tables.passwordResets, {
+        filter: { token },
+        limit: 1,
+    });
+    const reset = resets[0];
+    if (!reset) return { error: 'Invalid or expired reset token', status: 400 };
+    if (reset.used) return { error: 'This reset link has already been used', status: 400 };
+    if (new Date(String(reset.expiresAt)) < new Date()) {
+        return { error: 'This reset link has expired', status: 400 };
+    }
+
+    const hash = await hashPassword(newPassword);
+    await database.update(tables.users, [{
+        id: String(reset.userId),
+        record: { passwordHash: hash },
+    }]);
+    await database.update(tables.passwordResets, [{
+        id: String(reset.id),
+        record: { used: true },
+    }]);
+    return {};
+}
+
+// === User management ===
+
+export async function listUsers(): Promise<{ data: R[] }> {
+    const { items } = await database.list<R>(tables.users, { limit: 100 });
+    return { data: items.map(publicUser) };
+}
+
+export async function createUser(
+    body: R,
+    actingUser: { id: string; role: string }
+): Promise<{ data?: { user: R; pin: string }; error?: string; status?: number }> {
+    if (actingUser.role !== 'admin') return { error: 'Admin access required', status: 403 };
+    const name = String(body.name || '').trim();
+    const email = String(body.email || '').toLowerCase().trim();
+    if (!name) return { error: 'Name is required', status: 400 };
+    if (!email || !email.includes('@')) return { error: 'A valid email is required', status: 400 };
+
+    // Check email not taken
+    const { items: existing } = await database.list<R>(tables.users, {
+        filter: { email },
+        limit: 1,
+    });
+    if (existing.length > 0) return { error: 'An account with this email already exists', status: 409 };
+
+    // Admins can create other admins or attendants; defaults to attendant
+    const requestedRole = body.role as string | undefined;
+    const role = (requestedRole === 'admin' || requestedRole === 'attendant')
+        ? requestedRole
+        : 'attendant';
+
+    // Generate default PIN for the new user
+    const pin = generatePin();
+    const pinHash = await hashPin(pin);
+
+    const [id] = await database.add(tables.users, [{
+        name,
+        email,
+        pinHash,
+        role,
+        active: true,
+    }]);
+    if (!id) return { error: 'Could not create user', status: 500 };
+
+    return {
+        data: {
+            user: { id, name, email, role },
+            pin, // Returned only once, at creation time
+        },
+    };
+}
+
+export async function deactivateUser(
+    userId: string,
+    actingUser: { id: string; role: string }
+): Promise<{ error?: string; status?: number }> {
+    if (actingUser.role !== 'admin') return { error: 'Admin access required', status: 403 };
+    if (actingUser.id === userId) return { error: 'You cannot deactivate your own account', status: 400 };
+
+    const { items: users } = await database.list<R>(tables.users, {
+        filter: { id: userId },
+        limit: 1,
+    });
+    const user = users[0];
+    if (!user) return { error: 'User not found', status: 404 };
+
+    await database.update(tables.users, [{
+        id: userId,
+        record: { active: false },
+    }]);
+    return {};
 }

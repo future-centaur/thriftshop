@@ -1,10 +1,12 @@
 import {useEffect,useState,useRef,useMemo,useCallback} from 'react';
 import {AnimatePresence,motion,useMotionValue,useTransform,animate,LayoutGroup} from 'framer-motion';
-import {api} from './api';
+import {api, authApi} from './api';
+import type {User} from './api';
+import {LoginScreen, FirstRunWizard} from './LoginScreen';
 import {
   ArrowRight, BarChart3, Banknote, Camera, Check, ChevronRight,
-  Edit3, Layers3, Menu, Package, Plus, Search, ShoppingBag,
-  Smartphone, Tag, WalletCards, X,
+  Edit3, Layers3, LogOut, Menu, Package, Plus, Search, ShoppingBag,
+  Smartphone, Tag, Users, WalletCards, X,
 } from 'lucide-react';
 import {
   bouncySpring, smoothSpring, snappySpring, gentleSpring,
@@ -47,6 +49,11 @@ type Expense = { id: string; description: string; category: string; amount: numb
 type ExpenseCategory = { id: string; name: string };
 
 // ============================================================
+// Auth & idle lock constants
+// ============================================================
+const IDLE_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+
+// ============================================================
 // CountUp: smoothly animates a number to its target value
 // ============================================================
 function CountUp({ value, format = (n) => Math.round(n).toLocaleString() }: {
@@ -87,6 +94,14 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [toasts, setToasts] = useState<{id: string; message: string}[]>([]);
   const [menu, setMenu] = useState(false);
+
+  // ============================================================
+  // Auth state
+  // ============================================================
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isFirstRun, setIsFirstRun] = useState<boolean | null>(null); // null = checking
+  const [users, setUsers] = useState<User[]>([]); // For admin user filter on Expenses tab
+  const [allExpenses, setAllExpenses] = useState<Expense[]>([]); // admin sees all; attendant filtered
   const [showBale, setShowBale] = useState(false);
   const [showItem, setShowItem] = useState(false);
   const [editItem, setEditItem] = useState<Item | null>(null);
@@ -99,6 +114,12 @@ export default function App() {
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
   const [showExpense, setShowExpense] = useState(false);
   const [showRefund, setShowRefund] = useState<{saleId: string; total: number} | null>(null);
+  const [showAddUser, setShowAddUser] = useState(false);
+  const [newUserName, setNewUserName] = useState('');
+  const [newUserEmail, setNewUserEmail] = useState('');
+  const [newUserRole, setNewUserRole] = useState<'admin' | 'attendant'>('attendant');
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [showNewPin, setShowNewPin] = useState<{name: string; pin: string} | null>(null);
 
   // ============================================================
   // Data fetching
@@ -107,6 +128,7 @@ export default function App() {
     setLoading(true);
     try {
       const r = await api.get<{
+        isSetup: boolean; users: User[];
         items: Item[]; bales: Bale[]; rules: Rule[]; sales: Sale[];
         categories: string[]; qualities: string[];
         qualityRecords: {id: string; name: string}[];
@@ -114,17 +136,84 @@ export default function App() {
         expenseCategories: ExpenseCategory[];
       }>('/api/bootstrap');
       const d = r.data;
+
+      // If no users exist, this is a first-run — skip normal auth flow
+      if (!d.isSetup) {
+        setIsFirstRun(true);
+        setLoading(false);
+        return;
+      }
+
+      // Get session to confirm auth
+      const session = await authApi.getSession();
+      if (!session.data.user) {
+        setIsFirstRun(false);
+        setCurrentUser(null);
+        setLoading(false);
+        return;
+      }
+
+      setCurrentUser(session.data.user);
+      setIsFirstRun(false);
+      setUsers(d.users || []);
+
+      // Admin sees all expenses; attendant sees only their own
+      const isAdmin = session.data.user.role === 'admin';
+      const filteredExpenses = isAdmin
+        ? d.expenses
+        : d.expenses.filter((e: Expense & { userId?: string }) => e.userId === session.data.user?.id);
+
       setItems(d.items); setBales(d.bales); setRules(d.rules);
       setSales(d.sales); setCategories(d.categories);
       setQualityLevels(d.qualities || []);
       setQualityRecords(d.qualityRecords || []);
-      setExpenses(d.expenses || []);
+      setExpenses(filteredExpenses);
+      setAllExpenses(d.expenses); // admin: all expenses for filter
       setExpenseCategories(d.expenseCategories || []);
     } finally {
       setLoading(false);
     }
   };
   useEffect(() => { refresh(); }, []);
+
+  // ============================================================
+  // Idle auto-lock: log out after 15 min of inactivity
+  // ============================================================
+  useEffect(() => {
+    if (!currentUser) return;
+
+    let timer: number | null = null;
+    const resetTimer = () => {
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        handleLogout(true);
+      }, IDLE_TIMEOUT_MS);
+    };
+    const events = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'click'];
+    events.forEach((e) => window.addEventListener(e, resetTimer, { passive: true }));
+    resetTimer();
+    return () => {
+      if (timer) window.clearTimeout(timer);
+      events.forEach((e) => window.removeEventListener(e, resetTimer));
+    };
+  }, [currentUser]);
+
+  const handleLogout = async (idle: boolean = false) => {
+    try {
+      await authApi.logout();
+    } catch {
+      // Even if the API call fails, clear local state
+    }
+    setCurrentUser(null);
+    setIsFirstRun(false);
+    setItems([]); setBales([]); setRules([]); setSales([]);
+    setCategories([]); setQualityLevels([]); setQualityRecords([]);
+    setExpenses([]); setExpenseCategories([]);
+    setTab('home');
+    if (idle) {
+      showToast('Signed out due to inactivity');
+    }
+  };
 
   // ============================================================
   // Toast system
@@ -346,6 +435,44 @@ export default function App() {
   };
 
   // ============================================================
+  // User management
+  // ============================================================
+  const refreshUsers = useCallback(async () => {
+    const { data } = await authApi.listUsers();
+    setUsers(data ?? []);
+  }, []);
+
+  const createUserHandler = async () => {
+    if (!newUserName.trim() || !newUserEmail.trim()) return;
+    setCreatingUser(true);
+    try {
+      const { data } = await authApi.createUser(newUserName.trim(), newUserEmail.trim());
+      // data.user includes role, data.pin is the generated PIN shown once
+      setShowAddUser(false);
+      setNewUserName('');
+      setNewUserEmail('');
+      setNewUserRole('attendant');
+      setShowNewPin({ name: data!.user.name, pin: data!.pin });
+      await refreshUsers();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not add person');
+    } finally {
+      setCreatingUser(false);
+    }
+  };
+
+  const deactivateUserHandler = async (userId: string, name: string) => {
+    if (!window.confirm(`Deactivate ${name}? They will no longer be able to sign in.`)) return;
+    try {
+      await authApi.deactivateUser(userId);
+      await refreshUsers();
+      showToast(`${name} deactivated`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not deactivate user');
+    }
+  };
+
+  // ============================================================
   // Loading screen
   // ============================================================
   if (loading) {
@@ -378,8 +505,22 @@ export default function App() {
   }
 
   // ============================================================
+  // Auth gate
+  // ============================================================
+  if (isFirstRun === null) return null; // still checking session
+
+  if (isFirstRun) {
+    return <FirstRunWizard onSuccess={(user) => { setCurrentUser(user); setIsFirstRun(false); }} />;
+  }
+
+  if (!currentUser) {
+    return <LoginScreen onLogin={(user) => { setCurrentUser(user); }} />;
+  }
+
+  // ============================================================
   // Page render
   // ============================================================
+  const isAdmin = currentUser.role === 'admin';
   return (
     <div className="appShell">
       <aside className="sidebar">
@@ -410,13 +551,13 @@ export default function App() {
             <Nav active={tab === 'stock'} icon={<Package/>} text="Stock" onClick={() => go('stock')} index={2} />
             <Nav active={tab === 'sell'} icon={<ShoppingBag/>} text="Sell" onClick={() => go('sell')} index={3} />
             <Nav active={tab === 'review'} icon={<WalletCards/>} text="Review" onClick={() => go('review')} index={4} />
-            <Nav active={tab === 'expenses'} icon={<Banknote/>} text="Expenses" onClick={() => go('expenses')} index={5} />
-            <Nav active={tab === 'report'} icon={<BarChart3/>} text="Reports" onClick={() => go('report')} index={6} />
+            {isAdmin && <Nav active={tab === 'expenses'} icon={<Banknote/>} text="Expenses" onClick={() => go('expenses')} index={5} />}
+            {isAdmin && <Nav active={tab === 'report'} icon={<BarChart3/>} text="Reports" onClick={() => go('report')} index={6} />}
           </nav>
         </LayoutGroup>
 
         <div className="sidebarTools">
-          <Nav active={tab === 'settings'} icon={<Tag size={17}/>} text="Setup" onClick={() => go('settings')} index={7} isSetup />
+          {isAdmin && <Nav active={tab === 'settings'} icon={<Tag size={17}/>} text="Setup" onClick={() => go('settings')} index={7} isSetup />}
         </div>
 
         <motion.div
@@ -425,8 +566,29 @@ export default function App() {
           animate={{ opacity: 1 }}
           transition={{ delay: 0.5 }}
         >
-          <span className="onlineDot"/>Online
-          <small>Shared shop</small>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <div>
+              <span className="onlineDot"/>Online
+              <div style={{ fontSize: 11, opacity: 0.7, marginTop: 2 }}>{currentUser.name}</div>
+            </div>
+            <button
+              onClick={() => handleLogout()}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                padding: 6,
+                cursor: 'pointer',
+                color: 'var(--text-inverse)',
+                opacity: 0.7,
+                borderRadius: 8,
+              }}
+              title="Sign out"
+              onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.7'; }}
+            >
+              <LogOut size={16} />
+            </button>
+          </div>
         </motion.div>
       </aside>
 
@@ -474,9 +636,9 @@ export default function App() {
               <Nav active={tab === 'stock'} icon={<Package/>} text="Stock" onClick={() => go('stock')} index={2} />
               <Nav active={tab === 'sell'} icon={<ShoppingBag/>} text="Sell" onClick={() => go('sell')} index={3} />
               <Nav active={tab === 'review'} icon={<WalletCards/>} text="Review" onClick={() => go('review')} index={4} />
-              <Nav active={tab === 'expenses'} icon={<Banknote/>} text="Expenses" onClick={() => go('expenses')} index={5} />
-              <Nav active={tab === 'report'} icon={<BarChart3/>} text="Reports" onClick={() => go('report')} index={6} />
-              <Nav active={tab === 'settings'} icon={<Tag/>} text="Setup" onClick={() => go('settings')} index={7} />
+              {isAdmin && <Nav active={tab === 'expenses'} icon={<Banknote/>} text="Expenses" onClick={() => go('expenses')} index={5} />}
+              {isAdmin && <Nav active={tab === 'report'} icon={<BarChart3/>} text="Reports" onClick={() => go('report')} index={6} />}
+              {isAdmin && <Nav active={tab === 'settings'} icon={<Tag/>} text="Setup" onClick={() => go('settings')} index={7} />}
             </motion.div>
           )}
         </AnimatePresence>
@@ -523,7 +685,8 @@ export default function App() {
               <Expenses expenses={expenses} expenseCategories={expenseCategories}
                 onAdd={() => setShowExpense(true)} onDelete={removeExpense}
                 onAddCategory={addExpenseCategory}
-                onDeleteCategory={removeExpenseCategory}/>
+                onDeleteCategory={removeExpenseCategory}
+                allExpenses={allExpenses} users={users} isAdmin={isAdmin}/>
             )}
             {tab === 'report' && <Report showToast={showToast} />}
             {tab === 'settings' && (
@@ -533,7 +696,10 @@ export default function App() {
                 onRule={() => { setEditRule(null); setShowRule(true); }}
                 onEditRule={(r) => { setEditRule(r); setShowRule(true); }}
                 onCreateQuality={createQuality}
-                onDeleteQuality={deleteQuality}/>
+                onDeleteQuality={deleteQuality}
+                users={users} currentUser={currentUser}
+                deactivateUserHandler={deactivateUserHandler}
+                setShowAddUser={setShowAddUser}/>
             )}
           </motion.div>
         </AnimatePresence>
@@ -602,6 +768,79 @@ export default function App() {
               close={() => setShowCats(false)}>
               <CategoryManager categories={categories} onClose={() => setShowCats(false)}
                 onCreate={createCat} onRename={renameCat}/>
+            </Modal>
+          )}
+          {showAddUser && (
+            <Modal key="add-user" title="Add a person"
+              subtitle="They'll sign in with this email and their default PIN."
+              close={() => { if (!creatingUser) setShowAddUser(false); }}>
+              <div className="fieldGroup">
+                <label>Full name</label>
+                <input value={newUserName}
+                  onChange={(e) => setNewUserName(e.target.value)}
+                  placeholder="e.g. Achieng Otieno" autoFocus/>
+              </div>
+              <div className="fieldGroup">
+                <label>Email</label>
+                <input type="email" value={newUserEmail}
+                  onChange={(e) => setNewUserEmail(e.target.value)}
+                  placeholder="[email protected]"/>
+              </div>
+              <div className="fieldGroup">
+                <label>Role</label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button type="button"
+                    className={newUserRole === 'attendant' ? 'primary' : 'secondary'}
+                    style={{ flex: 1, padding: '10px 14px' }}
+                    onClick={() => setNewUserRole('attendant')}>
+                    Attendant
+                  </button>
+                  <button type="button"
+                    className={newUserRole === 'admin' ? 'primary' : 'secondary'}
+                    style={{ flex: 1, padding: '10px 14px' }}
+                    onClick={() => setNewUserRole('admin')}>
+                    Admin
+                  </button>
+                </div>
+                <small style={{ color: 'var(--text-secondary)', fontSize: 12, marginTop: 6, display: 'block' }}>
+                  {newUserRole === 'admin'
+                    ? 'Full access — user management, reports, all expenses, business settings.'
+                    : 'Floor access — sales, expenses, add items to bales.'}
+                </small>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
+                <button className="secondary" onClick={() => setShowAddUser(false)}
+                  disabled={creatingUser}>Cancel</button>
+                <button className="primary"
+                  disabled={!newUserName.trim() || !newUserEmail.trim() || creatingUser}
+                  onClick={createUserHandler}>
+                  {creatingUser ? 'Creating…' : 'Create'}
+                </button>
+              </div>
+            </Modal>
+          )}
+          {showNewPin && (
+            <Modal key="new-pin" title={`${showNewPin.name} is onboard`}
+              subtitle="Share this PIN with them. It's the only time it will be shown."
+              close={() => setShowNewPin(null)}>
+              <div style={{ textAlign: 'center', padding: '20px 0' }}>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                  Default PIN
+                </div>
+                <div style={{
+                  fontSize: 40, fontWeight: 700, letterSpacing: 8,
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  color: 'var(--text-primary)',
+                }}>
+                  {showNewPin.pin}
+                </div>
+                <p style={{ marginTop: 16, color: 'var(--text-secondary)', fontSize: 13 }}>
+                  They can sign in with this PIN now and change it later. They can also set a password from the login screen.
+                </p>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'center' }}>
+                <button className="primary" onClick={() => setShowNewPin(null)}>Got it</button>
+              </div>
             </Modal>
           )}
         </AnimatePresence>
@@ -1450,12 +1689,15 @@ function Review({sales, items, bales, revenue, profit, onRefund}: {
 // ============================================================
 // Setup Page
 // ============================================================
-function Setup({categories, rules, qualityLevels, qualityRecords, onCat, onRule, onEditRule, onCreateQuality, onDeleteQuality}: {
+function Setup({categories, rules, qualityLevels, qualityRecords, onCat, onRule, onEditRule, onCreateQuality, onDeleteQuality, users, currentUser, deactivateUserHandler, setShowAddUser}: {
   categories: string[]; rules: Rule[]; qualityLevels: string[];
   qualityRecords: {id: string; name: string}[];
   onCat: () => void; onRule: () => void; onEditRule: (r: Rule) => void;
   onCreateQuality: (name: string) => Promise<void>;
   onDeleteQuality: (id: string) => Promise<void>;
+  users: User[]; currentUser: User | null;
+  deactivateUserHandler: (userId: string, name: string) => void;
+  setShowAddUser: (v: boolean) => void;
 }) {
   const [open, setOpen] = useState<string | null>(categories[0] || null);
   const [newQuality, setNewQuality] = useState('');
@@ -1589,6 +1831,55 @@ function Setup({categories, rules, qualityLevels, qualityRecords, onCat, onRule,
                 </div>
               );
             })}
+          </div>
+        </motion.div>
+
+        <motion.div className="panel" variants={staggerItem}>
+          <div className="panelHead">
+            <div>
+              <span className="eyebrow">PEOPLE</span>
+              <h3>{users.length} {users.length === 1 ? 'person' : 'people'}</h3>
+            </div>
+            <button className="secondary" onClick={() => setShowAddUser(true)}>
+              <Plus size={15}/>Add person
+            </button>
+          </div>
+          <p>Admins see everything. Attendants work the floor — bales, items, sales, their own expenses.</p>
+          <div className="qualityManage">
+            {users.map((u) => (
+              <motion.div className="qualityManageRow" key={u.id}
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={smoothSpring}>
+                <span>
+                  <strong>{u.name}</strong>
+                  <small style={{ display: 'block', color: 'var(--text-secondary)', fontSize: 12, marginTop: 2 }}>
+                    {u.email} · <span style={{
+                      padding: '1px 6px',
+                      borderRadius: 4,
+                      background: u.role === 'admin' ? 'rgba(168, 85, 247, 0.15)' : 'rgba(59, 130, 246, 0.15)',
+                      color: u.role === 'admin' ? '#a855f7' : '#3b82f6',
+                      fontSize: 11,
+                      fontWeight: 600,
+                    }}>{u.role}</span>
+                    {(u as any).active === false && (
+                      <span style={{ marginLeft: 6, padding: '1px 6px', borderRadius: 4,
+                        background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444',
+                        fontSize: 11, fontWeight: 600 }}>inactive</span>
+                    )}
+                  </small>
+                </span>
+                {(u as any).active !== false && u.id !== currentUser?.id && (
+                  <motion.button className="iconBtn danger"
+                    title="Deactivate"
+                    onClick={() => deactivateUserHandler(u.id, u.name)}
+                    whileHover={{ scale: 1.1 }}
+                    whileTap={{ scale: 0.9 }}>
+                    <X size={15}/>
+                  </motion.button>
+                )}
+              </motion.div>
+            ))}
           </div>
         </motion.div>
       </motion.div>
@@ -2104,21 +2395,28 @@ function CategoryManager({categories, onClose, onCreate, onRename}: {
 // ============================================================
 // Expenses Page
 // ============================================================
-function Expenses({expenses, expenseCategories, onAdd, onDelete, onAddCategory, onDeleteCategory}: {
+function Expenses({expenses, expenseCategories, onAdd, onDelete, onAddCategory, onDeleteCategory, allExpenses, users, isAdmin}: {
   expenses: Expense[]; expenseCategories: ExpenseCategory[];
   onAdd: () => void; onDelete: (id: string) => Promise<void>;
   onAddCategory: (name: string) => Promise<void>; onDeleteCategory: (id: string) => Promise<void>;
+  allExpenses?: Expense[]; users?: User[]; isAdmin?: boolean;
 }) {
   const [addingCategory, setAddingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [expenseUserFilter, setExpenseUserFilter] = useState<string>('all');
   const addCategoryRef = useRef<HTMLInputElement>(null);
+
+  // For admin, use allExpenses + user filter; for attendant, use already-filtered expenses
+  const visibleExpenses = isAdmin
+    ? (expenseUserFilter === 'all' ? (allExpenses || expenses) : (allExpenses || expenses).filter((e: any) => e.userId === expenseUserFilter))
+    : expenses;
 
   const today = new Date().toISOString().slice(0, 10);
   const thisMonth = today.slice(0, 7);
-  const monthExpenses = expenses.filter((e) => e.expenseDate.startsWith(thisMonth));
+  const monthExpenses = visibleExpenses.filter((e) => e.expenseDate.startsWith(thisMonth));
   const monthTotal = monthExpenses.reduce((a, e) => a + e.amount, 0);
-  const sorted = [...expenses].sort((a, b) => b.expenseDate.localeCompare(a.expenseDate));
+  const sorted = [...visibleExpenses].sort((a, b) => b.expenseDate.localeCompare(a.expenseDate));
 
   const startAddingCategory = () => {
     setAddingCategory(true);
@@ -2140,6 +2438,31 @@ function Expenses({expenses, expenseCategories, onAdd, onDelete, onAddCategory, 
         text="Rent, transport, packaging and other shop costs. Subtract from gross profit to see your real take-home."
         action="Add expense" onClick={onAdd}/>
 
+      {isAdmin && users && users.length > 0 && (
+        <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
+          <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Filter by attendant:</label>
+          <select
+            value={expenseUserFilter}
+            onChange={(e) => setExpenseUserFilter(e.target.value)}
+            style={{
+              padding: '8px 12px',
+              borderRadius: 10,
+              border: '1.5px solid var(--bg-secondary)',
+              background: 'var(--bg-card)',
+              color: 'var(--text-primary)',
+              fontSize: 13,
+              fontWeight: 500,
+              cursor: 'pointer',
+            }}
+          >
+            <option value="all">All users</option>
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>{u.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
       <motion.div className="metricGrid"
         variants={staggerContainer(0.08, 0.1)} initial="initial" animate="enter">
         <motion.div className="metric" variants={staggerItem} whileHover={{ y: -4 }}>
@@ -2148,7 +2471,7 @@ function Expenses({expenses, expenseCategories, onAdd, onDelete, onAddCategory, 
         </motion.div>
         <motion.div className="metric" variants={staggerItem} whileHover={{ y: -4 }}>
           <span>Total entries</span>
-          <strong><CountUp value={expenses.length} format={(n) => String(Math.round(n))}/></strong>
+          <strong><CountUp value={visibleExpenses.length} format={(n) => String(Math.round(n))}/></strong>
         </motion.div>
         <motion.div className="metric" variants={staggerItem} whileHover={{ y: -4 }}>
           <span>This month count</span>
@@ -2220,27 +2543,30 @@ function Expenses({expenses, expenseCategories, onAdd, onDelete, onAddCategory, 
         <span className="eyebrow">ALL EXPENSES</span>
         <h3>Recent entries</h3>
         {sorted.length === 0 && <p>No expenses recorded yet.</p>}
-        {sorted.slice(0, 50).map((e) => (
-          <motion.div className="saleRow" key={e.id}
-            initial={{ opacity: 0, x: -10 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={smoothSpring}>
-            <span>
-              <strong>{e.description}</strong>
-              <em className="muted"> · {e.category} · {e.expenseDate}</em>
-            </span>
-            <span className="saleRowRight">
-              <b>{money(e.amount)}</b>
-              <motion.button className="iconBtn danger"
-                title="Delete expense"
-                onClick={() => onDelete(e.id)}
-                whileHover={{ scale: 1.1 }}
-                whileTap={{ scale: 0.9 }}>
-                <X size={14}/>
-              </motion.button>
-            </span>
-          </motion.div>
-        ))}
+        {sorted.slice(0, 50).map((e) => {
+          const expUser = users?.find((u) => u.id === (e as any).userId);
+          return (
+            <motion.div className="saleRow" key={e.id}
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={smoothSpring}>
+              <span>
+                <strong>{e.description}</strong>
+                <em className="muted"> · {e.category} · {e.expenseDate}{isAdmin && expUser ? ` · by ${expUser.name}` : ''}</em>
+              </span>
+              <span className="saleRowRight">
+                <b>{money(e.amount)}</b>
+                <motion.button className="iconBtn danger"
+                  title="Delete expense"
+                  onClick={() => onDelete(e.id)}
+                  whileHover={{ scale: 1.1 }}
+                  whileTap={{ scale: 0.9 }}>
+                  <X size={14}/>
+                </motion.button>
+              </span>
+            </motion.div>
+          );
+        })}
       </motion.div>
     </section>
   );
