@@ -141,11 +141,15 @@ export default function App() {
   const available = items.filter((i) => i.status === 'AVAILABLE');
   const today = new Date().toISOString().slice(0, 10);
   const todaySales = sales.filter((s) => s.createdAt.slice(0, 10) === today);
+  const todayExpenses = expenses.filter((e) => e.expenseDate === today);
   const revenue = todaySales.reduce((a, s) => a + s.total, 0);
-  const profit = todaySales.reduce(
+  const grossProfit = todaySales.reduce(
     (a, s) => a + s.items.reduce((x, i) => x + i.actualSalePrice - i.basePrice, 0),
     0
   );
+  // Net = gross profit minus today's shop expenses (rent, transport, etc.)
+  const todayExpenseTotal = todayExpenses.reduce((a, e) => a + e.amount, 0);
+  const profit = grossProfit - todayExpenseTotal;
 
   // ============================================================
   // Tab navigation with direction tracking
@@ -1361,7 +1365,7 @@ function Review({sales, items, bales, revenue, profit}: {
           <strong>KSh <CountUp value={revenue} format={(n) => Math.round(n).toLocaleString()}/></strong>
         </motion.div>
         <motion.div className="metric" variants={staggerItem} whileHover={{ y: -4 }}>
-          <span>Estimated gross profit</span>
+          <span>Net take-home (after expenses)</span>
           <strong>KSh <CountUp value={profit} format={(n) => Math.round(n).toLocaleString()}/></strong>
         </motion.div>
         <motion.div className="metric" variants={staggerItem} whileHover={{ y: -4 }}>
