@@ -2767,3 +2767,156 @@ button:focus-visible {
     display: none;
   }
 }
+
+/* ============================================================
+   Expense Category Bar
+   ============================================================ */
+.expenseCategoryBar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 40px 24px;
+  padding: 12px 16px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.expenseCategoryLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.expenseCategoryChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.expenseCategoryChip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 6px 14px;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.expenseCategoryRemove {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: var(--bg-secondary);
+  border-radius: 50%;
+  color: var(--text-muted);
+  transition: all var(--transition-fast);
+}
+
+.expenseCategoryRemove:hover {
+  background: var(--error-light);
+  color: var(--error);
+}
+
+.expenseCategoryAdd {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: var(--bg-card);
+  border: 1.5px dashed var(--border-strong);
+  border-radius: 50%;
+  color: var(--accent-primary);
+  transition: all var(--transition-fast);
+}
+
+.expenseCategoryAdd:hover {
+  background: var(--accent-light);
+  border-color: var(--accent-primary);
+  border-style: solid;
+  color: var(--accent-secondary);
+}
+
+.expenseCategoryConfirm {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--error);
+}
+
+.expenseCategoryConfirmYes,
+.expenseCategoryConfirmNo {
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+}
+
+.expenseCategoryConfirmYes {
+  background: var(--error);
+  color: white;
+}
+
+.expenseCategoryConfirmYes:hover {
+  opacity: 0.85;
+}
+
+.expenseCategoryConfirmNo {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+}
+
+.expenseCategoryConfirmNo:hover {
+  background: var(--border);
+}
+
+.expenseCategoryAddInline {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--bg-card);
+  border: 1.5px solid var(--accent-primary);
+  border-radius: var(--radius-full);
+}
+
+.expenseCategoryAddInline input {
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  width: 120px;
+}
+
+.expenseCategoryAddInline input::placeholder {
+  color: var(--text-muted);
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .expenseCategoryBar {
+    margin: 0 16px 20px;
+    padding: 10px 12px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .expenseCategoryAddInline input {
+    width: 100px;
+  }
+}

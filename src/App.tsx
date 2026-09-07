@@ -34,10 +34,16 @@ type Sale = {
   id: string; createdAt: string; total: number; paymentMethod: string;
   items: { itemId: string; basePrice: number; actualSalePrice: number }[];
 };
-type Tab = 'home' | 'receive' | 'stock' | 'sell' | 'review' | 'settings';
+type Tab = 'home' | 'receive' | 'stock' | 'sell' | 'review' | 'expenses' | 'report' | 'settings';
 
 const sizes = ['XS','S','M','L','XL','XXL','Free Size'];
 const money = (n: number) => `KSh ${Math.round(n).toLocaleString()}`;
+
+// ============================================================
+// Expense types
+// ============================================================
+type Expense = { id: string; description: string; category: string; amount: number; expenseDate: string };
+type ExpenseCategory = { id: string; name: string };
 
 // ============================================================
 // CountUp: smoothly animates a number to its target value
@@ -88,6 +94,9 @@ export default function App() {
   const [showCats, setShowCats] = useState(false);
   const [cart, setCart] = useState<{item: Item; price: number}[]>([]);
   const [checkout, setCheckout] = useState(false);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
+  const [showExpense, setShowExpense] = useState(false);
 
   // ============================================================
   // Data fetching
@@ -99,12 +108,16 @@ export default function App() {
         items: Item[]; bales: Bale[]; rules: Rule[]; sales: Sale[];
         categories: string[]; qualities: string[];
         qualityRecords: {id: string; name: string}[];
+        expenses: Expense[];
+        expenseCategories: ExpenseCategory[];
       }>('/api/bootstrap');
       const d = r.data;
       setItems(d.items); setBales(d.bales); setRules(d.rules);
       setSales(d.sales); setCategories(d.categories);
       setQualityLevels(d.qualities || []);
       setQualityRecords(d.qualityRecords || []);
+      setExpenses(d.expenses || []);
+      setExpenseCategories(d.expenseCategories || []);
     } finally {
       setLoading(false);
     }
@@ -258,6 +271,47 @@ export default function App() {
     catch (e) { showToast(e instanceof Error ? e.message : 'Quality cannot be deleted because it is in use'); }
   };
 
+  const addExpense = async (p: { description: string; category: string; amount: number; expenseDate: string }) => {
+    try {
+      await api.post('/api/expenses', p);
+      setShowExpense(false);
+      await refresh();
+      showToast('Expense recorded');
+    } catch {
+      showToast('Could not add expense');
+    }
+  };
+
+  const removeExpense = async (id: string) => {
+    try {
+      await api.delete(`/api/expenses/${id}`);
+      await refresh();
+      showToast('Expense removed');
+    } catch {
+      showToast('Could not remove expense');
+    }
+  };
+
+  const addExpenseCategory = async (name: string) => {
+    try {
+      await api.post('/api/expense-categories', { name });
+      await refresh();
+      showToast(`Category "${name}" added`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not add category');
+    }
+  };
+
+  const removeExpenseCategory = async (id: string) => {
+    try {
+      await api.delete(`/api/expense-categories/${id}`);
+      await refresh();
+      showToast('Category removed');
+    } catch {
+      showToast('Could not remove category');
+    }
+  };
+
   const completeSale = async (method: string) => {
     try {
       await api.post('/api/sales', {
@@ -401,7 +455,8 @@ export default function App() {
               <Nav active={tab === 'stock'} icon={<Package/>} text="Stock" onClick={() => go('stock')} index={2} />
               <Nav active={tab === 'sell'} icon={<ShoppingBag/>} text="Sell" onClick={() => go('sell')} index={3} />
               <Nav active={tab === 'review'} icon={<WalletCards/>} text="Review" onClick={() => go('review')} index={4} />
-              <Nav active={tab === 'settings'} icon={<Tag/>} text="Setup" onClick={() => go('settings')} index={5} />
+              <Nav active={tab === 'expenses'} icon={<Banknote/>} text="Expenses" onClick={() => go('expenses')} index={5} />
+              <Nav active={tab === 'settings'} icon={<Tag/>} text="Setup" onClick={() => go('settings')} index={6} />
             </motion.div>
           )}
         </AnimatePresence>
@@ -443,6 +498,12 @@ export default function App() {
               <Review sales={sales} items={items} bales={bales}
                 revenue={revenue} profit={profit}/>
             )}
+            {tab === 'expenses' && (
+              <Expenses expenses={expenses} expenseCategories={expenseCategories}
+                onAdd={() => setShowExpense(true)} onDelete={removeExpense}
+                onAddCategory={addExpenseCategory}
+                onDeleteCategory={removeExpenseCategory}/>
+            )}
             {tab === 'settings' && (
               <Setup categories={categories} rules={rules}
                 qualityLevels={qualityLevels} qualityRecords={qualityRecords}
@@ -470,6 +531,14 @@ export default function App() {
               close={() => setShowItem(false)}>
               <ItemForm bales={bales} categories={categories} rules={rules}
                 qualityLevels={qualityLevels} onSave={createItem}/>
+            </Modal>
+          )}
+          {showExpense && (
+            <Modal key="expense" title="Add Expense"
+              subtitle="Record a shop expense — rent, transport, packaging and more."
+              close={() => setShowExpense(false)}>
+              <ExpenseForm today={today} expenseCategories={expenseCategories}
+                onSave={addExpense}/>
             </Modal>
           )}
           {editItem && (
@@ -1986,5 +2055,194 @@ function CategoryManager({categories, onClose, onCreate, onRename}: {
         </div>
       ))}
     </div>
+  );
+}
+
+// ============================================================
+// Expenses Page
+// ============================================================
+function Expenses({expenses, expenseCategories, onAdd, onDelete, onAddCategory, onDeleteCategory}: {
+  expenses: Expense[]; expenseCategories: ExpenseCategory[];
+  onAdd: () => void; onDelete: (id: string) => Promise<void>;
+  onAddCategory: (name: string) => Promise<void>; onDeleteCategory: (id: string) => Promise<void>;
+}) {
+  const [addingCategory, setAddingCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const addCategoryRef = useRef<HTMLInputElement>(null);
+
+  const today = new Date().toISOString().slice(0, 10);
+  const thisMonth = today.slice(0, 7);
+  const monthExpenses = expenses.filter((e) => e.expenseDate.startsWith(thisMonth));
+  const monthTotal = monthExpenses.reduce((a, e) => a + e.amount, 0);
+  const sorted = [...expenses].sort((a, b) => b.expenseDate.localeCompare(a.expenseDate));
+
+  const startAddingCategory = () => {
+    setAddingCategory(true);
+    setTimeout(() => addCategoryRef.current?.focus(), 50);
+  };
+
+  const submitNewCategory = () => {
+    const name = newCategoryName.trim();
+    if (name) {
+      onAddCategory(name);
+      setNewCategoryName('');
+      setAddingCategory(false);
+    }
+  };
+
+  return (
+    <section>
+      <PageHead eyebrow="EXPENSES" title="Track what goes out"
+        text="Rent, transport, packaging and other shop costs. Subtract from gross profit to see your real take-home."
+        action="Add expense" onClick={onAdd}/>
+
+      <motion.div className="metricGrid"
+        variants={staggerContainer(0.08, 0.1)} initial="initial" animate="enter">
+        <motion.div className="metric" variants={staggerItem} whileHover={{ y: -4 }}>
+          <span>This month</span>
+          <strong>KSh <CountUp value={monthTotal} format={(n) => Math.round(n).toLocaleString()}/></strong>
+        </motion.div>
+        <motion.div className="metric" variants={staggerItem} whileHover={{ y: -4 }}>
+          <span>Total entries</span>
+          <strong><CountUp value={expenses.length} format={(n) => String(Math.round(n))}/></strong>
+        </motion.div>
+        <motion.div className="metric" variants={staggerItem} whileHover={{ y: -4 }}>
+          <span>This month count</span>
+          <strong><CountUp value={monthExpenses.length} format={(n) => String(Math.round(n))}/></strong>
+        </motion.div>
+      </motion.div>
+
+      {/* Category manager — chip row with + to add, × to remove */}
+      <motion.div className="expenseCategoryBar"
+        initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={smoothSpring}>
+        <span className="expenseCategoryLabel">Categories</span>
+        <div className="expenseCategoryChips">
+          {expenseCategories.map((c) => (
+            <span key={c.id} className="expenseCategoryChip">
+              {confirmDelete === c.id ? (
+                <>
+                  <span className="expenseCategoryConfirm">Remove?</span>
+                  <motion.button className="expenseCategoryConfirmYes"
+                    onClick={() => { setConfirmDelete(null); onDeleteCategory(c.id); }}
+                    whileTap={{ scale: 0.9 }}>
+                    Yes
+                  </motion.button>
+                  <motion.button className="expenseCategoryConfirmNo"
+                    onClick={() => setConfirmDelete(null)}
+                    whileTap={{ scale: 0.9 }}>
+                    No
+                  </motion.button>
+                </>
+              ) : (
+                <>
+                  {c.name}
+                  <motion.button className="expenseCategoryRemove"
+                    onClick={() => setConfirmDelete(c.id)}
+                    whileHover={{ scale: 1.2 }} whileTap={{ scale: 0.9 }}>
+                    <X size={11}/>
+                  </motion.button>
+                </>
+              )}
+            </span>
+          ))}
+          {addingCategory ? (
+            <span className="expenseCategoryAddInline">
+              <input ref={addCategoryRef} type="text" value={newCategoryName}
+                placeholder="Category name"
+                onChange={(e) => setNewCategoryName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { e.preventDefault(); submitNewCategory(); }
+                  if (e.key === 'Escape') { setNewCategoryName(''); setAddingCategory(false); }
+                }}
+                onBlur={() => { if (!newCategoryName.trim()) setAddingCategory(false); }}/>
+              <motion.button className="expenseCategoryConfirmYes"
+                onMouseDown={(e) => { e.preventDefault(); submitNewCategory(); }}
+                whileTap={{ scale: 0.9 }}>
+                Add
+              </motion.button>
+            </span>
+          ) : (
+            <motion.button className="expenseCategoryAdd"
+              onClick={startAddingCategory}
+              whileTap={{ scale: 0.95 }}>
+              <Plus size={13}/>
+            </motion.button>
+          )}
+        </div>
+      </motion.div>
+
+      <motion.div className="panel" initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }} transition={bouncySpring}>
+        <span className="eyebrow">ALL EXPENSES</span>
+        <h3>Recent entries</h3>
+        {sorted.length === 0 && <p>No expenses recorded yet.</p>}
+        {sorted.slice(0, 50).map((e) => (
+          <motion.div className="saleRow" key={e.id}
+            initial={{ opacity: 0, x: -10 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={smoothSpring}>
+            <span>
+              <strong>{e.description}</strong>
+              <em className="muted"> · {e.category} · {e.expenseDate}</em>
+            </span>
+            <span className="saleRowRight">
+              <b>{money(e.amount)}</b>
+              <motion.button className="iconBtn danger"
+                title="Delete expense"
+                onClick={() => onDelete(e.id)}
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.9 }}>
+                <X size={14}/>
+              </motion.button>
+            </span>
+          </motion.div>
+        ))}
+      </motion.div>
+    </section>
+  );
+}
+
+function ExpenseForm({today, expenseCategories, onSave}: {
+  today: string;
+  expenseCategories: ExpenseCategory[];
+  onSave: (p: { description: string; category: string; amount: number; expenseDate: string }) => Promise<void>;
+}) {
+  const [description, setDescription] = useState('');
+  const [category, setCategory] = useState<string>(expenseCategories[0]?.name || '');
+  const [amount, setAmount] = useState('');
+  const [date, setDate] = useState(today);
+  const canSave = description.trim() && category.trim() && Number(amount) >= 0 && date;
+
+  return (
+    <form className="form" onSubmit={(e) => {
+      e.preventDefault();
+      if (canSave) onSave({
+        description: description.trim(),
+        category,
+        amount: Number(amount),
+        expenseDate: date,
+      });
+    }}>
+      <Field label="Description">
+        <input type="text" value={description} onChange={(e) => setDescription(e.target.value)}
+          placeholder="Bus fare to market" required/>
+      </Field>
+      <Field label="Category">
+        <select value={category} onChange={(e) => setCategory(e.target.value)} required>
+          {expenseCategories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+        </select>
+      </Field>
+      <Field label="Amount (KSh)">
+        <input type="number" min="0" value={amount} onChange={(e) => setAmount(e.target.value)}
+          placeholder="500" required/>
+      </Field>
+      <Field label="Date">
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} required/>
+      </Field>
+      <motion.button className="primary wide" disabled={!canSave} whileTap={{ scale: 0.97 }}>
+        Save expense
+      </motion.button>
+    </form>
   );
 }
