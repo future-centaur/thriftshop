@@ -67,12 +67,13 @@ function error(status: number, message: string): Response {
 // ── Auth middleware ──────────────────────────────────────────────────────────
 
 const PUBLIC_PATHS = new Set([
-    '/_healthcheck',
-    '/bootstrap',
-    '/auth/login',
-    '/auth/forgot-password',
-    '/auth/reset-password',
-    '/auth/register-first-admin',
+    '/api/_healthcheck',
+    '/api/bootstrap',
+    '/api/auth/session',
+    '/api/auth/login',
+    '/api/auth/forgot-password',
+    '/api/auth/reset-password',
+    '/api/auth/register-first-admin',
 ]);
 
 const ADMIN_ONLY_PATHS = new Set([

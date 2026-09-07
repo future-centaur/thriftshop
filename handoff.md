@@ -1,5 +1,44 @@
 # ThriftShop Handoff — September 2026
 
+## Bug fix: white page on startup (September 7, 2026)
+
+### Symptom
+After `npm run dev`, Vite served the React app but the screen stayed white. The API server was running, but every request to `/api/*` returned `{"error":"Not authenticated. Please log in."}` — including the bootstrap call. With the bootstrap fetch failing, the `App` component never moved past its `loading` screen, so nothing rendered.
+
+### Root cause
+`api/local-server.ts`'s auth middleware compared `c.req.path` against a `PUBLIC_PATHS` set whose entries were *missing the `/api` prefix* AND missing `/auth/session` itself:
+
+```ts
+const PUBLIC_PATHS = new Set([
+    '/_healthcheck',
+    '/bootstrap',
+    '/auth/login',
+    ...
+]);
+```
+
+Hono's `c.req.path` includes the base path, so the actual paths were `/api/_healthcheck`, `/api/bootstrap`, `/api/auth/session`, etc. None matched. Every request — even the unauthenticated bootstrap — was rejected with 401.
+
+### Fix
+Updated `PUBLIC_PATHS` to use the full `/api/...` paths, and added `/api/auth/session` (which was missing entirely):
+
+```ts
+const PUBLIC_PATHS = new Set([
+    '/api/_healthcheck',
+    '/api/bootstrap',
+    '/api/auth/session',
+    '/api/auth/login',
+    '/api/auth/forgot-password',
+    '/api/auth/reset-password',
+    '/api/auth/register-first-admin',
+]);
+```
+
+A restart of `npm run dev` is required for the change to take effect.
+
+### Also fixed earlier in the same session
+- Killed a leftover `alibeka` process holding port 5180/3002 (EADDRINUSE on dev startup). Cleared with `Get-NetTCPConnection` + `Stop-Process`.
+
 ## What was built this session
 
 ### Reports tab (complete)
