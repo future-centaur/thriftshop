@@ -393,11 +393,12 @@ export default function App() {
             <Nav active={tab === 'stock'} icon={<Package/>} text="Stock" onClick={() => go('stock')} index={2} />
             <Nav active={tab === 'sell'} icon={<ShoppingBag/>} text="Sell" onClick={() => go('sell')} index={3} />
             <Nav active={tab === 'review'} icon={<WalletCards/>} text="Review" onClick={() => go('review')} index={4} />
+            <Nav active={tab === 'expenses'} icon={<Banknote/>} text="Expenses" onClick={() => go('expenses')} index={5} />
           </nav>
         </LayoutGroup>
 
         <div className="sidebarTools">
-          <Nav active={tab === 'settings'} icon={<Tag size={17}/>} text="Setup" onClick={() => go('settings')} index={5} isSetup />
+          <Nav active={tab === 'settings'} icon={<Tag size={17}/>} text="Setup" onClick={() => go('settings')} index={6} isSetup />
         </div>
 
         <motion.div
