@@ -32,6 +32,7 @@ type Bale = {
 type Rule = { id: string; category: string; quality: string; basePrice: number };
 type Sale = {
   id: string; createdAt: string; total: number; paymentMethod: string;
+  isRefund?: boolean; reason?: string; originalSaleId?: string;
   items: { itemId: string; basePrice: number; actualSalePrice: number }[];
 };
 type Tab = 'home' | 'receive' | 'stock' | 'sell' | 'review' | 'expenses' | 'report' | 'settings';
@@ -97,6 +98,7 @@ export default function App() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
   const [showExpense, setShowExpense] = useState(false);
+  const [showRefund, setShowRefund] = useState<{saleId: string; total: number} | null>(null);
 
   // ============================================================
   // Data fetching
@@ -332,6 +334,17 @@ export default function App() {
     }
   };
 
+  const processRefund = async (saleId: string, reason: string) => {
+    try {
+      await api.post('/api/refunds', { saleId, reason });
+      setShowRefund(null);
+      await refresh();
+      showToast('Refund processed — items restored to stock');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not process refund');
+    }
+  };
+
   // ============================================================
   // Loading screen
   // ============================================================
@@ -398,11 +411,12 @@ export default function App() {
             <Nav active={tab === 'sell'} icon={<ShoppingBag/>} text="Sell" onClick={() => go('sell')} index={3} />
             <Nav active={tab === 'review'} icon={<WalletCards/>} text="Review" onClick={() => go('review')} index={4} />
             <Nav active={tab === 'expenses'} icon={<Banknote/>} text="Expenses" onClick={() => go('expenses')} index={5} />
+            <Nav active={tab === 'report'} icon={<BarChart3/>} text="Reports" onClick={() => go('report')} index={6} />
           </nav>
         </LayoutGroup>
 
         <div className="sidebarTools">
-          <Nav active={tab === 'settings'} icon={<Tag size={17}/>} text="Setup" onClick={() => go('settings')} index={6} isSetup />
+          <Nav active={tab === 'settings'} icon={<Tag size={17}/>} text="Setup" onClick={() => go('settings')} index={7} isSetup />
         </div>
 
         <motion.div
@@ -461,7 +475,8 @@ export default function App() {
               <Nav active={tab === 'sell'} icon={<ShoppingBag/>} text="Sell" onClick={() => go('sell')} index={3} />
               <Nav active={tab === 'review'} icon={<WalletCards/>} text="Review" onClick={() => go('review')} index={4} />
               <Nav active={tab === 'expenses'} icon={<Banknote/>} text="Expenses" onClick={() => go('expenses')} index={5} />
-              <Nav active={tab === 'settings'} icon={<Tag/>} text="Setup" onClick={() => go('settings')} index={6} />
+              <Nav active={tab === 'report'} icon={<BarChart3/>} text="Reports" onClick={() => go('report')} index={6} />
+              <Nav active={tab === 'settings'} icon={<Tag/>} text="Setup" onClick={() => go('settings')} index={7} />
             </motion.div>
           )}
         </AnimatePresence>
@@ -501,7 +516,8 @@ export default function App() {
             )}
             {tab === 'review' && (
               <Review sales={sales} items={items} bales={bales}
-                revenue={revenue} profit={profit}/>
+                revenue={revenue} profit={profit}
+                onRefund={(saleId, total) => setShowRefund({ saleId, total })}/>
             )}
             {tab === 'expenses' && (
               <Expenses expenses={expenses} expenseCategories={expenseCategories}
@@ -509,6 +525,7 @@ export default function App() {
                 onAddCategory={addExpenseCategory}
                 onDeleteCategory={removeExpenseCategory}/>
             )}
+            {tab === 'report' && <Report showToast={showToast} />}
             {tab === 'settings' && (
               <Setup categories={categories} rules={rules}
                 qualityLevels={qualityLevels} qualityRecords={qualityRecords}
@@ -544,6 +561,16 @@ export default function App() {
               close={() => setShowExpense(false)}>
               <ExpenseForm today={today} expenseCategories={expenseCategories}
                 onSave={addExpense}/>
+            </Modal>
+          )}
+          {showRefund && (
+            <Modal key="refund" title={`Refund ${money(showRefund.total)}?`}
+              subtitle="A refund creates a negative sale and restores the items to available stock."
+              close={() => setShowRefund(null)}>
+              <RefundForm
+                total={showRefund.total}
+                onConfirm={(reason) => processRefund(showRefund.saleId, reason)}
+                onCancel={() => setShowRefund(null)}/>
             </Modal>
           )}
           {editItem && (
@@ -623,7 +650,8 @@ export default function App() {
 function tabTitle(t: Tab) {
   return t === 'home' ? 'Today' : t === 'receive' ? 'Receive & prepare' :
          t === 'stock' ? 'Stock' : t === 'sell' ? 'Sell' :
-         t === 'review' ? 'Review' : 'Setup';
+         t === 'review' ? 'Review' : t === 'expenses' ? 'Expenses' :
+         t === 'report' ? 'Reports' : 'Setup';
 }
 
 // ============================================================
@@ -1340,9 +1368,10 @@ function POS({items, categories, qualityLevels, cart, setCart, onSale, checkout,
 // ============================================================
 // Review Page
 // ============================================================
-function Review({sales, items, bales, revenue, profit}: {
+function Review({sales, items, bales, revenue, profit, onRefund}: {
   sales: Sale[]; items: Item[]; bales: Bale[];
   revenue: number; profit: number;
+  onRefund: (saleId: string, total: number) => void;
 }) {
   const sold = items.filter((i) => i.status === 'SOLD').length;
   const itemsSoldToday = sales
@@ -1365,7 +1394,7 @@ function Review({sales, items, bales, revenue, profit}: {
           <strong>KSh <CountUp value={revenue} format={(n) => Math.round(n).toLocaleString()}/></strong>
         </motion.div>
         <motion.div className="metric" variants={staggerItem} whileHover={{ y: -4 }}>
-          <span>Net take-home (after expenses)</span>
+          <span>Gross profit (before expenses)</span>
           <strong>KSh <CountUp value={profit} format={(n) => Math.round(n).toLocaleString()}/></strong>
         </motion.div>
         <motion.div className="metric" variants={staggerItem} whileHover={{ y: -4 }}>
@@ -1394,12 +1423,21 @@ function Review({sales, items, bales, revenue, profit}: {
           <span className="eyebrow">TRANSACTIONS</span>
           <h3>Recent sales</h3>
           {sales.slice(0, 6).map((s) => (
-            <motion.div className="saleRow" key={s.id}
+            <motion.div className={`saleRow ${s.isRefund ? 'refundRow' : ''}`} key={s.id}
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
               transition={smoothSpring}>
-              <span>{new Date(s.createdAt).toLocaleString()} · {s.paymentMethod}</span>
-              <b>{money(s.total)}</b>
+              <span>{new Date(s.createdAt).toLocaleString()} · {s.paymentMethod}{s.isRefund ? ' · Refund' : ''}</span>
+              <span className="saleRowRight">
+                <b>{money(s.total)}</b>
+                {!s.isRefund && (
+                  <motion.button className="refundBtn"
+                    onClick={() => onRefund(s.id, s.total)}
+                    whileTap={{ scale: 0.95 }}>
+                    Refund
+                  </motion.button>
+                )}
+              </span>
             </motion.div>
           ))}
           {!sales.length && <p>No sales yet.</p>}
@@ -2249,5 +2287,210 @@ function ExpenseForm({today, expenseCategories, onSave}: {
         Save expense
       </motion.button>
     </form>
+  );
+}
+
+// ============================================================
+// Reports Page
+// ============================================================
+type PeriodReport = {
+  from: string; to: string;
+  totalRevenue: number; totalRefunds: number; netRevenue: number;
+  totalExpenses: number; grossProfit: number; netProfit: number;
+  itemCount: number; baleCount: number;
+  topCategories: Array<{ category: string; count: number; revenue: number }>;
+};
+
+function getRange(preset: 'today' | 'week' | 'month' | 'year'): { from: string; to: string } {
+  const today = new Date();
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  if (preset === 'today') return { from: iso(today), to: iso(today) };
+  if (preset === 'week') {
+    const d = new Date(today);
+    d.setDate(today.getDate() - 6);
+    return { from: iso(d), to: iso(today) };
+  }
+  if (preset === 'month') {
+    const d = new Date(today.getFullYear(), today.getMonth(), 1);
+    return { from: iso(d), to: iso(today) };
+  }
+  const d = new Date(today.getFullYear(), 0, 1);
+  return { from: iso(d), to: iso(today) };
+}
+
+function Report({showToast}: {
+  showToast: (message: string) => void;
+}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [from, setFrom] = useState(today);
+  const [to, setTo] = useState(today);
+  const [report, setReport] = useState<PeriodReport | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = async (f: string, t: string) => {
+    setLoading(true);
+    try {
+      const r = await api.get<PeriodReport>(`/api/reports/period?from=${f}&to=${t}`);
+      setReport(r.data);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not load report');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(from, to); }, [from, to]);
+
+  const setPreset = (preset: 'today' | 'week' | 'month' | 'year') => {
+    const r = getRange(preset);
+    setFrom(r.from);
+    setTo(r.to);
+  };
+
+  return (
+    <section>
+      <PageHead eyebrow="STEP 8 · REPORTS" title="See the period, not the day"
+        text="A day's profit hides the truth. A week, month, or year shows whether the shop is actually making money."/>
+
+      <motion.div className="reportDateBar"
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={smoothSpring}>
+        <Field label="From">
+          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} max={to}/>
+        </Field>
+        <Field label="To">
+          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} min={from} max={today}/>
+        </Field>
+        <div className="reportPresets">
+          <motion.button className="secondary"
+            onClick={() => setPreset('today')} whileTap={{ scale: 0.95 }}>
+            Today
+          </motion.button>
+          <motion.button className="secondary"
+            onClick={() => setPreset('week')} whileTap={{ scale: 0.95 }}>
+            This week
+          </motion.button>
+          <motion.button className="secondary"
+            onClick={() => setPreset('month')} whileTap={{ scale: 0.95 }}>
+            This month
+          </motion.button>
+          <motion.button className="secondary"
+            onClick={() => setPreset('year')} whileTap={{ scale: 0.95 }}>
+            This year
+          </motion.button>
+        </div>
+      </motion.div>
+
+      {loading && <p className="muted reportStatus">Loading report…</p>}
+
+      {report && !loading && (
+        <>
+          <motion.div className="metricGrid"
+            variants={staggerContainer(0.08, 0.1)}
+            initial="initial" animate="enter">
+            <motion.div className="metric" variants={staggerItem} whileHover={{ y: -4 }}>
+              <span>Net revenue</span>
+              <strong>KSh <CountUp value={report.netRevenue} format={(n) => Math.round(n).toLocaleString()}/></strong>
+            </motion.div>
+            <motion.div className="metric" variants={staggerItem} whileHover={{ y: -4 }}>
+              <span>Gross profit</span>
+              <strong>KSh <CountUp value={report.grossProfit} format={(n) => Math.round(n).toLocaleString()}/></strong>
+            </motion.div>
+            <motion.div className="metric metricAccent" variants={staggerItem} whileHover={{ y: -4 }}>
+              <span>Net profit (after expenses)</span>
+              <strong>KSh <CountUp value={report.netProfit} format={(n) => Math.round(n).toLocaleString()}/></strong>
+            </motion.div>
+            <motion.div className="metric" variants={staggerItem} whileHover={{ y: -4 }}>
+              <span>Total expenses</span>
+              <strong>KSh <CountUp value={report.totalExpenses} format={(n) => Math.round(n).toLocaleString()}/></strong>
+            </motion.div>
+            <motion.div className="metric" variants={staggerItem} whileHover={{ y: -4 }}>
+              <span>Refunds</span>
+              <strong>KSh <CountUp value={report.totalRefunds} format={(n) => Math.round(n).toLocaleString()}/></strong>
+            </motion.div>
+            <motion.div className="metric" variants={staggerItem} whileHover={{ y: -4 }}>
+              <span>Items sold</span>
+              <strong><CountUp value={report.itemCount} format={(n) => String(Math.round(n))}/></strong>
+            </motion.div>
+            <motion.div className="metric" variants={staggerItem} whileHover={{ y: -4 }}>
+              <span>Bales received</span>
+              <strong><CountUp value={report.baleCount} format={(n) => String(Math.round(n))}/></strong>
+            </motion.div>
+          </motion.div>
+
+          <motion.div className="panel"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ ...bouncySpring, delay: 0.3 }}>
+            <span className="eyebrow">TOP CATEGORIES</span>
+            <h3>Revenue by category</h3>
+            {report.topCategories.length === 0
+              ? <p>No sales in this period.</p>
+              : report.topCategories.map((c) => (
+                  <motion.div className="categoryRow" key={c.category}
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={smoothSpring}>
+                    <strong>{c.category}</strong>
+                    <span className="muted">{c.count} sold</span>
+                    <b>{money(c.revenue)}</b>
+                  </motion.div>
+                ))}
+          </motion.div>
+
+          <motion.p className="reportFooter muted"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.5 }}>
+            Range: {report.from} → {report.to}
+          </motion.p>
+        </>
+      )}
+    </section>
+  );
+}
+
+// ============================================================
+// Refund Form
+// ============================================================
+function RefundForm({total, onConfirm, onCancel}: {
+  total: number; onConfirm: (reason: string) => Promise<void>; onCancel: () => void;
+}) {
+  const [reason, setReason] = useState<'Wrong item' | 'Customer changed mind' | 'Defective' | 'Other'>('Wrong item');
+  const [busy, setBusy] = useState(false);
+  const reasons: Array<'Wrong item' | 'Customer changed mind' | 'Defective' | 'Other'> =
+    ['Wrong item', 'Customer changed mind', 'Defective', 'Other'];
+
+  return (
+    <div className="form">
+      <div className="refundTotal">
+        <span>Sale total</span>
+        <strong>{money(total)}</strong>
+        <small>This will be reversed and items returned to stock.</small>
+      </div>
+      <div className="refundReasons">
+        {reasons.map((r) => (
+          <label key={r} className={`refundReasonOption ${reason === r ? 'selected' : ''}`}>
+            <input type="radio" name="refundReason" value={r}
+              checked={reason === r}
+              onChange={() => setReason(r)}/>
+            <span>{r}</span>
+          </label>
+        ))}
+      </div>
+      <div className="refundActions">
+        <motion.button type="button" className="secondary"
+          onClick={onCancel} whileTap={{ scale: 0.95 }}>
+          Cancel
+        </motion.button>
+        <motion.button type="button" className="primary"
+          disabled={busy}
+          onClick={async () => { setBusy(true); await onConfirm(reason); setBusy(false); }}
+          whileTap={{ scale: 0.95 }}>
+          Confirm refund
+        </motion.button>
+      </div>
+    </div>
   );
 }
