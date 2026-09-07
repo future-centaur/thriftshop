@@ -20,13 +20,21 @@ function getClient(): NeonQueryFunction<false, false> {
 }
 
 const PHOTO_KEYS = new Set(['photo_key', 'photoKey']);
+const BOOL_KEYS = new Set(['is_refund', 'isRefund']);
 
 // Convert incoming camelCase keys to snake_case to match DB columns.
 function toDbRecord(record: Record<string, unknown>): Record<string, unknown> {
     const out: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(record)) {
         // Convert camelCase to snake_case (only for known keys)
-        const dbKey = PHOTO_KEYS.has(key) ? 'photo_key' : key;
+        let dbKey = key;
+        if (PHOTO_KEYS.has(key)) dbKey = 'photo_key';
+        else if (BOOL_KEYS.has(key)) dbKey = 'is_refund';
+        else if (key === 'originalSaleId') dbKey = 'original_sale_id';
+        else if (key === 'saleId') dbKey = 'sale_id';
+        else if (key === 'itemId') dbKey = 'item_id';
+        else if (key === 'baleId') dbKey = 'bale_id';
+        else if (key === 'expenseDate') dbKey = 'expense_date';
         out[dbKey] = value;
     }
     return out;
@@ -68,6 +76,21 @@ function toApiRecord<T = Record<string, any>>(row: T | null | undefined): T | nu
     if ('updated_at' in out) {
         out.updatedAt = typeof out.updated_at === 'string' ? out.updated_at : (out.updated_at as Date)?.toISOString?.() ?? out.updated_at;
     }
+    if ('cogs' in out) {
+        out.cogs = typeof out.cogs === 'string' ? Number(out.cogs) : out.cogs;
+    }
+    if ('is_refund' in out) {
+        out.isRefund = Boolean(out.is_refund);
+    }
+    if ('reason' in out) {
+        out.reason = out.reason;
+    }
+    if ('original_sale_id' in out) {
+        out.originalSaleId = out.original_sale_id;
+    }
+    if ('expense_date' in out) {
+        out.expenseDate = out.expense_date;
+    }
     return out as T;
 }
 
@@ -80,7 +103,8 @@ function quoteIdent(ident: string): string {
 
 const ALLOWED_TABLES = new Set([
     'items', 'bales', 'price_rules', 'sales', 'sale_items',
-    'meta', 'categories', 'qualities', 'entity_subscriptions',
+    'meta', 'categories', 'qualities', 'entity_subscriptions', 'expenses',
+    'expense_categories',
 ]);
 
 function validateTable(table: string): void {
@@ -159,6 +183,10 @@ export const database: Database = {
             }
             paramIndex++;
         }
+        // Always exclude soft-deleted rows on expense_categories
+        if (table === 'expense_categories' && !Object.prototype.hasOwnProperty.call(filter, 'active')) {
+            whereClauses.push(`${quoteIdent('active')} <> false`);
+        }
         const where = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
         const query = `SELECT * FROM ${t} ${where} ORDER BY created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
         const result = await sql(query, [...values, limit, offset]);
@@ -178,6 +206,23 @@ export const database: Database = {
             delete (dbRecord as Record<string, unknown>).id;
             delete (dbRecord as Record<string, unknown>).created_at;
             delete (dbRecord as Record<string, unknown>).updated_at;
+            // Also strip camelCase aliases that toApiRecord adds when reading rows.
+            // Without this, the UPDATE query references non-existent columns and
+            // silently fails, so soft-deletes and edits appear to succeed but do nothing.
+            delete (dbRecord as Record<string, unknown>).createdAt;
+            delete (dbRecord as Record<string, unknown>).updatedAt;
+            delete (dbRecord as Record<string, unknown>).purchasePrice;
+            delete (dbRecord as Record<string, unknown>).purchaseDate;
+            delete (dbRecord as Record<string, unknown>).baleNumber;
+            delete (dbRecord as Record<string, unknown>).paymentMethod;
+            delete (dbRecord as Record<string, unknown>).itemCount;
+            delete (dbRecord as Record<string, unknown>).expenseDate;
+            delete (dbRecord as Record<string, unknown>).basePrice;
+            delete (dbRecord as Record<string, unknown>).actualPrice;
+            delete (dbRecord as Record<string, unknown>).cogs;
+            delete (dbRecord as Record<string, unknown>).isRefund;
+            delete (dbRecord as Record<string, unknown>).originalSaleId;
+            delete (dbRecord as Record<string, unknown>).photoKey;
             const columns = Object.keys(dbRecord);
             if (!columns.length) {
                 results.push(false);

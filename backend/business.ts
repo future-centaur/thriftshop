@@ -12,6 +12,8 @@ const tables = {
     meta: 'meta',
     categories: 'categories',
     qualities: 'qualities',
+    expenses: 'expenses',
+    expenseCategories: 'expense_categories',
 };
 
 const seedCategories = ['Dresses', 'Pallazos', 'Sweatpants', 'Tops', 'Shirts', 'Trousers', 'Skirts'];
@@ -63,13 +65,15 @@ async function ensureSeed() {
 
 export async function bootstrap() {
     await ensureSeed();
-    const [rawItems, bales, rules, sales, cats, qs] = await Promise.all([
+    const [rawItems, bales, rules, sales, cats, qs, expenses, expenseCats] = await Promise.all([
         list(tables.items),
         list(tables.bales),
         list(tables.rules),
         list(tables.sales),
         list(tables.categories),
         list(tables.qualities),
+        list(tables.expenses),
+        list(tables.expenseCategories),
     ]);
     const items = await addPhotoUrls(rawItems);
     const categories = cats.filter((c) => c.active !== false).map((c) => String(c.name)).sort();
@@ -82,6 +86,10 @@ export async function bootstrap() {
         categories,
         qualities,
         qualityRecords: qs.filter((q) => q.active !== false).map((q) => ({ id: String(q.id), name: String(q.name) })),
+        expenses,
+        expenseCategories: expenseCats
+            .filter((c) => c.active !== false)
+            .sort((a, b) => String(a.name).localeCompare(String(b.name))),
     };
 }
 
@@ -228,7 +236,26 @@ export async function createItem(body: R) {
         status: 'AVAILABLE',
         photo: '',
     }]);
-    return id ? { data: { id }, status: 201 } : { error: 'Could not create item', status: 500 };
+    if (!id) return { error: 'Could not create item', status: 500 };
+    // Increment the parent bale's item count to keep it in sync
+    const newCount = Number(bale.itemCount || 0) + 1;
+    await database.update(tables.bales, [{ id: String(bale.id), record: { ...bale, itemCount: newCount } }]);
+    return { data: { id }, status: 201 };
+}
+
+export async function deleteItem(params: { id: string }) {
+    const [old] = await database.get<R>(tables.items, [params.id]);
+    if (!old) return { error: 'Item not found', status: 404 };
+    const ok = await database.delete(tables.items, [params.id]);
+    if (!ok[0]) return { error: 'Could not delete item', status: 500 };
+    if (old.baleId) {
+        const [bale] = await database.get<R>(tables.bales, [String(old.baleId)]);
+        if (bale) {
+            const newCount = Math.max(0, Number(bale.itemCount || 0) - 1);
+            await database.update(tables.bales, [{ id: String(bale.id), record: { ...bale, itemCount: newCount } }]);
+        }
+    }
+    return { data: { deleted: true } };
 }
 
 export async function uploadItemPhoto(params: { id: string }, body: R) {
@@ -312,6 +339,20 @@ export async function saveRule(body: R) {
 }
 
 // === Sale operations ===
+
+/** Compute average COGS for an item from its bale. Returns 0 for items with no bale. */
+async function getItemCogs(itemId: string): Promise<number> {
+    const [item] = await database.get<R>(tables.items, [itemId]);
+    if (!item || !item.baleId) return 0;
+    const [bale] = await database.get<R>(tables.bales, [String(item.baleId)]);
+    if (!bale) return 0;
+    const count = Number(bale.itemCount || 0);
+    if (count <= 0) {
+        console.warn(`[getItemCogs] Bale ${bale.id} has zero itemCount; COGS set to 0`);
+        return 0;
+    }
+    return Number(bale.purchasePrice || 0) / count;
+}
 export async function createSale(body: R) {
     const saleItems = Array.isArray(body.items) ? body.items as R[] : [];
     if (!saleItems.length || !['Cash', 'M-Pesa'].includes(String(body.paymentMethod))) {
@@ -332,13 +373,14 @@ export async function createSale(body: R) {
     }]);
     if (!saleId) return { error: 'Could not create sale', status: 500 };
 
-    // Insert relational sale_items
-    const saleItemRecords = saleItems.map((i) => ({
+    // Compute COGS per item and insert sale_items
+    const saleItemRecords = await Promise.all(saleItems.map(async (i) => ({
         saleId: String(saleId),
         itemId: String(i.itemId),
         basePrice: Number(i.basePrice || 0),
         actualPrice: Number(i.actualSalePrice || 0),
-    }));
+        cogs: await getItemCogs(String(i.itemId)),
+    })));
     const saleItemIds = await database.add(tables.saleItems, saleItemRecords);
     if (saleItemIds.some((x) => !x)) {
         return { error: 'Sale created but sale items could not be recorded', status: 500 };
@@ -352,4 +394,188 @@ export async function createSale(body: R) {
         return { error: 'Sale created but inventory update needs review', status: 500 };
     }
     return { data: { id: saleId, total }, status: 201 };
+}
+
+// === Refund operations ===
+export async function createRefund(body: R) {
+    const saleId = String(body.saleId || '');
+    const reason = String(body.reason || '').trim();
+    if (!saleId) return { error: 'Sale ID is required', status: 400 };
+    if (!['Wrong item', 'Customer changed mind', 'Defective', 'Other'].includes(reason)) {
+        return { error: 'A valid reason is required', status: 400 };
+    }
+
+    const [sale] = await database.get<R>(tables.sales, [saleId]);
+    if (!sale) return { error: 'Sale not found', status: 404 };
+    if (sale.isRefund) return { error: 'This sale has already been refunded', status: 409 };
+
+    // Fetch all sale_items for this sale
+    const { items: saleItems } = await database.list<R>(tables.saleItems, {
+        filter: { saleId },
+    });
+
+    // Refund total = negative of original
+    const refundTotal = -Math.abs(Number(sale.total));
+
+    const [refundId] = await database.add(tables.sales, [{
+        total: refundTotal,
+        paymentMethod: String(sale.paymentMethod),
+        createdAt: new Date().toISOString(),
+        isRefund: true,
+        reason,
+        originalSaleId: saleId,
+    }]);
+    if (!refundId) return { error: 'Could not create refund', status: 500 };
+
+    // Restore each item to AVAILABLE
+    const itemIds = saleItems.map((si) => String(si.itemId));
+    const itemRecords = await database.get<R>(tables.items, itemIds);
+    await database.update(tables.items, itemRecords
+        .filter(Boolean)
+        .map((item) => ({ id: String(item!.id), record: { ...item, status: 'AVAILABLE' } })));
+
+    return { data: { id: refundId, total: refundTotal }, status: 201 };
+}
+
+// === Expense operations ===
+export async function createExpense(body: R) {
+    const description = String(body.description || '').trim();
+    const category = String(body.category || '').trim();
+    const amount = Number(body.amount);
+    const expenseDate = String(body.expenseDate || '').trim();
+
+    if (!description) return { error: 'Description is required', status: 400 };
+    if (!category) return { error: 'Category is required', status: 400 };
+    if (!Number.isFinite(amount) || amount < 0) {
+        return { error: 'Enter a valid amount', status: 400 };
+    }
+    if (!expenseDate) return { error: 'Date is required', status: 400 };
+
+    // Validate category exists in the user's category list
+    const { items: cats } = await database.list<R>(tables.expenseCategories, { filter: { active: true } });
+    if (!cats.some((c) => String(c.name).toLowerCase() === category.toLowerCase())) {
+        return { error: `"${category}" is not in your expense categories. Add it first.`, status: 400 };
+    }
+
+    const [id] = await database.add(tables.expenses, [{
+        description,
+        category,
+        amount,
+        expenseDate,
+    }]);
+    return id
+        ? { data: { id }, status: 201 }
+        : { error: 'Could not create expense', status: 500 };
+}
+
+export async function deleteExpense(params: { id: string }) {
+    const [existing] = await database.get<R>(tables.expenses, [params.id]);
+    if (!existing) return { error: 'Expense not found', status: 404 };
+    const ok = await database.delete(tables.expenses, [params.id]);
+    return ok[0] ? { data: { deleted: true } } : { error: 'Could not delete expense', status: 500 };
+}
+
+// === Expense category operations ===
+export async function createExpenseCategory(body: R) {
+    const name = String(body.name || '').trim();
+    if (!name) return { error: 'Category name is required', status: 400 };
+    if (name.length > 60) return { error: 'Name is too long (max 60 chars)', status: 400 };
+    const { items: existing } = await database.list<R>(tables.expenseCategories, {});
+    if (existing.some((c) => String(c.name).toLowerCase() === name.toLowerCase())) {
+        return { error: 'This category already exists', status: 409 };
+    }
+    const [id] = await database.add(tables.expenseCategories, [{ name, active: true }]);
+    return id ? { data: { id, name }, status: 201 } : { error: 'Could not create category', status: 500 };
+}
+
+export async function deleteExpenseCategory(params: { id: string }) {
+    const [existing] = await database.get<R>(tables.expenseCategories, [params.id]);
+    if (!existing) return { error: 'Category not found', status: 404 };
+    // Soft-delete: mark inactive rather than removing, so existing expenses keep their label
+    await database.update(tables.expenseCategories, [{
+        id: params.id,
+        record: { ...existing, active: false },
+    }]);
+    return { data: { deleted: true } };
+}
+
+// === Reports ===
+export async function getPeriodReport(query: { from?: string; to?: string }) {
+    const from = query.from || new Date().toISOString().slice(0, 10);
+    const to = query.to || new Date().toISOString().slice(0, 10);
+
+    // Fetch all sales in range
+    const { items: allSales } = await database.list<R>(tables.sales, { limit: 5000 });
+    const periodSales = allSales.filter((s) => {
+        const d = String(s.createdAt || '').slice(0, 10);
+        return d >= from && d <= to;
+    });
+
+    const refundSales = periodSales.filter((s) => s.isRefund);
+    const regularSales = periodSales.filter((s) => !s.isRefund);
+
+    const totalRevenue = regularSales.reduce((a, s) => a + Number(s.total || 0), 0);
+    const totalRefunds = Math.abs(refundSales.reduce((a, s) => a + Number(s.total || 0), 0));
+    const netRevenue = totalRevenue - totalRefunds;
+
+    // Fetch sale_items for all regular sales in period to compute gross profit
+    const regularSaleIds = regularSales.map((s) => String(s.id));
+    const { items: allSaleItems } = await database.list<R>(tables.saleItems, { limit: 10000 });
+    const periodSaleItems = allSaleItems.filter((si) => regularSaleIds.includes(String(si.saleId)));
+    const grossProfit = periodSaleItems.reduce(
+        (a, si) => a + (Number(si.actualPrice || 0) - Number(si.cogs || 0)),
+        0
+    );
+
+    // Expenses in range
+    const { items: allExpenses } = await database.list<R>(tables.expenses, { limit: 5000 });
+    const periodExpenses = allExpenses.filter((e) => {
+        const d = String(e.expenseDate || '').slice(0, 10);
+        return d >= from && d <= to;
+    });
+    const totalExpenses = periodExpenses.reduce((a, e) => a + Number(e.amount || 0), 0);
+
+    const netProfit = grossProfit - totalExpenses;
+
+    // Bales received in range
+    const { items: allBales } = await database.list<R>(tables.bales, { limit: 1000 });
+    const baleCount = allBales.filter((b) => {
+        const d = String(b.purchaseDate || '').slice(0, 10);
+        return d >= from && d <= to;
+    }).length;
+
+    // Items sold (from regular sales)
+    const itemCount = periodSaleItems.length;
+
+    // Top categories by revenue
+    const { items: allItems } = await database.list<R>(tables.items, { limit: 10000 });
+    const itemMap = new Map(allItems.map((i) => [String(i.id), i]));
+    const categoryRevenue = new Map<string, { count: number; revenue: number }>();
+    for (const si of periodSaleItems) {
+        const item = itemMap.get(String(si.itemId));
+        if (!item) continue;
+        const cat = String(item.category || 'Unknown');
+        const entry = categoryRevenue.get(cat) || { count: 0, revenue: 0 };
+        entry.count++;
+        entry.revenue += Number(si.actualPrice || 0);
+        categoryRevenue.set(cat, entry);
+    }
+    const topCategories = [...categoryRevenue.entries()]
+        .map(([category, v]) => ({ category, count: v.count, revenue: v.revenue }))
+        .sort((a, b) => b.revenue - a.revenue);
+
+    return {
+        data: {
+            from, to,
+            totalRevenue: Math.round(totalRevenue),
+            totalRefunds: Math.round(totalRefunds),
+            netRevenue: Math.round(netRevenue),
+            totalExpenses: Math.round(totalExpenses),
+            grossProfit: Math.round(grossProfit),
+            netProfit: Math.round(netProfit),
+            itemCount,
+            baleCount,
+            topCategories,
+        },
+    };
 }

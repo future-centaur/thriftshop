@@ -8,11 +8,18 @@ import {
     createQuality,
     deleteQuality,
     createItem,
+    deleteItem,
     uploadItemPhoto,
     deleteItemPhoto,
     updateItem,
     saveRule,
     createSale,
+    createRefund,
+    createExpense,
+    deleteExpense,
+    createExpenseCategory,
+    deleteExpenseCategory,
+    getPeriodReport,
 } from '../backend/business';
 
 type ApiResult<T = unknown> = { data?: T; error?: string; status?: number };
@@ -71,6 +78,10 @@ app.put('/items/:id', async (c) => {
     return respond(await updateItem({ id }, body));
 });
 
+app.delete('/items/:id', async (c) => {
+    return respond(await deleteItem({ id: c.req.param('id') }));
+});
+
 app.post('/items/:id/photo', async (c) => {
     const id = c.req.param('id');
     const body = await c.req.json().catch(() => ({}));
@@ -89,6 +100,35 @@ app.post('/rules', async (c) => {
 app.post('/sales', async (c) => {
     const body = await c.req.json().catch(() => ({}));
     return respond(await createSale(body));
+});
+
+app.post('/refunds', async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    return respond(await createRefund(body));
+});
+
+app.post('/expenses', async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    return respond(await createExpense(body));
+});
+
+app.delete('/expenses/:id', async (c) => {
+    return respond(await deleteExpense({ id: c.req.param('id') }));
+});
+
+app.post('/expense-categories', async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    return respond(await createExpenseCategory(body));
+});
+
+app.delete('/expense-categories/:id', async (c) => {
+    return respond(await deleteExpenseCategory({ id: c.req.param('id') }));
+});
+
+app.get('/reports/period', async (c) => {
+    const from = c.req.query('from');
+    const to = c.req.query('to');
+    return respond(await getPeriodReport({ from, to }));
 });
 
 // Export the Vercel-compatible handler
