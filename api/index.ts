@@ -28,6 +28,7 @@ import {
     getSession,
     changePin,
     changePassword,
+    updateProfile,
     requestPasswordReset,
     resetPassword,
     listUsers,
@@ -212,6 +213,13 @@ app.patch('/auth/password', async (c) => {
     const result = await changePassword(user.id, String(body.currentPassword || ''), String(body.newPassword || ''));
     if (result.error) return respond(result);
     return respond({ data: { ok: true } });
+});
+
+// PATCH /api/auth/profile  — change own name / email
+app.patch('/auth/profile', async (c) => {
+    const user = c.get('user') as SessionUser;
+    const body = await c.req.json().catch(() => ({}));
+    return respond(await updateProfile(user.id, body));
 });
 
 // POST /api/auth/forgot-password

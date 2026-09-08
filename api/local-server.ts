@@ -33,6 +33,7 @@ import {
     getSession,
     changePin,
     changePassword,
+    updateProfile,
     requestPasswordReset,
     resetPassword,
     listUsers,
@@ -192,6 +193,12 @@ app.patch('/auth/password', async (c) => {
     const user = c.get('user') as SessionUser;
     const body = await c.req.json().catch(() => ({}));
     return respond(await changePassword(user.id, String(body.currentPassword || ''), String(body.newPassword || '')));
+});
+
+app.patch('/auth/profile', async (c) => {
+    const user = c.get('user') as SessionUser;
+    const body = await c.req.json().catch(() => ({}));
+    return respond(await updateProfile(user.id, body));
 });
 
 app.post('/auth/forgot-password', async (c) => {
