@@ -59,14 +59,12 @@ export async function validateSession(
     database: Database,
     token: string
 ): Promise<{ user: SessionUser; sessionId: string } | null> {
+    // Session row only carries id, user_id, expires_at, created_at (see migration 003).
+    // The user itself is joined separately so deactivating a user invalidates all their sessions.
     const { items } = await database.list<{
         id: string;
         user_id: string;
         expires_at: string;
-        name: string;
-        email: string;
-        role: string;
-        active: boolean;
     }>('sessions', { filter: { id: token }, limit: 1 });
 
     const session = items[0];
@@ -79,15 +77,23 @@ export async function validateSession(
         return null;
     }
 
-    // Ensure user still exists and is active
-    if (!session.active) return null;
+    // Look up the user and ensure they're still active
+    const { items: users } = await database.list<{
+        id: string;
+        name: string;
+        email: string;
+        role: string;
+        active: boolean;
+    }>('users', { filter: { id: session.user_id }, limit: 1 });
+    const user = users[0];
+    if (!user || user.active === false) return null;
 
     return {
         user: {
-            id: session.user_id,
-            name: session.name,
-            email: session.email,
-            role: session.role as 'admin' | 'attendant',
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            role: user.role as 'admin' | 'attendant',
         },
         sessionId: session.id,
     };
