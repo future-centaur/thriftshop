@@ -42,6 +42,26 @@ function publicUser(u: R) {
     return rest;
 }
 
+type SessionUserPublic = {
+    id: string;
+    name: string;
+    email: string;
+    role: string;
+    hasPin: boolean;
+    hasPassword: boolean;
+};
+
+function toSessionUser(u: R): SessionUserPublic {
+    return {
+        id: String(u.id),
+        name: String(u.name),
+        email: String(u.email),
+        role: String(u.role),
+        hasPin: !!u.pinHash,
+        hasPassword: !!u.passwordHash,
+    };
+}
+
 const seedCategories = ['Dresses', 'Pallazos', 'Sweatpants', 'Tops', 'Shirts', 'Trousers', 'Skirts'];
 const seedRules: Array<[string, string, number]> = [
     ['Dresses', '1st', 1000], ['Dresses', '2nd', 700], ['Dresses', '3rd', 450],
@@ -107,7 +127,7 @@ export async function bootstrap() {
     const qualities = qs.filter((q) => q.active !== false).map((q) => String(q.name));
     return {
         isSetup: users.length > 0,
-        users: users.filter((u) => u.active !== false).map(publicUser),
+        users: users.filter((u) => u.active !== false && u.active !== 'false').map(publicUser),
         items,
         bales,
         rules: rules.filter((r) => qualities.includes(String(r.quality)) && String(r.quality) !== 'Camera'),
@@ -625,7 +645,7 @@ export async function deleteSession(sessionId: string): Promise<void> {
 
 // === Auth: login ===
 
-type AuthSuccess = { user: { id: string; name: string; email: string; role: string }; token: string };
+type AuthSuccess = { user: SessionUserPublic; token: string };
 
 export async function login(body: R): Promise<{ data?: AuthSuccess; error?: string; status?: number }> {
     const email = String(body.email || '').toLowerCase().trim();
@@ -661,12 +681,7 @@ export async function login(body: R): Promise<{ data?: AuthSuccess; error?: stri
     const token = await createSession(String(user.id));
     return {
         data: {
-            user: {
-                id: String(user.id),
-                name: String(user.name),
-                email: String(user.email),
-                role: String(user.role),
-            },
+            user: toSessionUser(user),
             token,
         },
     };
@@ -704,7 +719,7 @@ export async function registerFirstAdmin(body: R): Promise<{ data?: AuthSuccess;
     const token = await createSession(String(id));
     return {
         data: {
-            user: { id: String(id), name, email, role: 'admin' },
+            user: { id: String(id), name, email, role: 'admin', hasPin: false, hasPassword: true },
             token,
         },
     };
@@ -735,12 +750,7 @@ export async function getSession(token?: string): Promise<{ user: R | null; isSe
     if (!user) return { user: null, isSetup: false };
 
     return {
-        user: {
-            id: String(user.id),
-            name: String(user.name),
-            email: String(user.email),
-            role: String(user.role),
-        },
+        user: toSessionUser(user),
         isSetup: true,
     };
 }
@@ -785,6 +795,54 @@ export async function changePassword(
     const hash = await hashPassword(newPw);
     await database.update(tables.users, [{ id: userId, record: { passwordHash: hash } }]);
     return {};
+}
+
+// === Auth: update own name / email ===
+
+export async function updateProfile(
+    userId: string,
+    body: R
+): Promise<{ data?: { user: SessionUserPublic }; error?: string; status?: number }> {
+    const name = String(body.name || '').trim();
+    const email = String(body.email || '').toLowerCase().trim();
+
+    if (!name) return { error: 'Name is required', status: 400 };
+    if (!email || !email.includes('@')) return { error: 'A valid email is required', status: 400 };
+
+    const { items: current } = await database.list<R>(tables.users, {
+        filter: { id: userId },
+        limit: 1,
+    });
+    const user = current[0];
+    if (!user) return { error: 'User not found', status: 404 };
+
+    if (email !== String(user.email)) {
+        const { items: existing } = await database.list<R>(tables.users, {
+            filter: { email },
+            limit: 1,
+        });
+        if (existing.length > 0 && String(existing[0].id) !== userId) {
+            return { error: 'An account with this email already exists', status: 409 };
+        }
+    }
+
+    await database.update(tables.users, [{
+        id: userId,
+        record: { name, email },
+    }]);
+
+    return {
+        data: {
+            user: {
+                id: userId,
+                name,
+                email,
+                role: String(user.role),
+                hasPin: !!user.pinHash,
+                hasPassword: !!user.passwordHash,
+            },
+        },
+    };
 }
 
 // === Auth: request password reset ===
@@ -915,5 +973,13 @@ export async function deactivateUser(
         id: userId,
         record: { active: false },
     }]);
+
+    const { items: sessions } = await database.list<R>(tables.sessions, {
+        filter: { user_id: userId },
+        limit: 100,
+    });
+    if (sessions.length) {
+        await database.delete(tables.sessions, sessions.map((s) => String(s.id)));
+    }
     return {};
 }
