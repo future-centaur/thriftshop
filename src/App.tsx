@@ -6,7 +6,7 @@ import {LoginScreen, FirstRunWizard} from './LoginScreen';
 import {
   ArrowRight, BarChart3, Banknote, Camera, Check, ChevronRight,
   Edit3, Layers3, LogOut, Menu, Package, Plus, Search, ShoppingBag,
-  Smartphone, Tag, Users, WalletCards, X,
+  Smartphone, Tag, WalletCards, X,
 } from 'lucide-react';
 import {
   bouncySpring, smoothSpring, snappySpring, gentleSpring,
@@ -120,6 +120,7 @@ export default function App() {
   const [newUserRole, setNewUserRole] = useState<'admin' | 'attendant'>('attendant');
   const [creatingUser, setCreatingUser] = useState(false);
   const [showNewPin, setShowNewPin] = useState<{name: string; pin: string} | null>(null);
+  const [showProfile, setShowProfile] = useState(false);
 
   // ============================================================
   // Data fetching
@@ -205,6 +206,7 @@ export default function App() {
       // Even if the API call fails, clear local state
     }
     setCurrentUser(null);
+    setShowProfile(false);
     setIsFirstRun(false);
     setItems([]); setBales([]); setRules([]); setSales([]);
     setCategories([]); setQualityLevels([]); setQualityRecords([]);
@@ -472,6 +474,13 @@ export default function App() {
     }
   };
 
+  const handleUserUpdated = (user: User) => {
+    setCurrentUser(user);
+    setUsers((prev) => prev.map((u) => (
+      u.id === user.id ? { ...u, name: user.name, email: user.email } : u
+    )));
+  };
+
   // ============================================================
   // Loading screen
   // ============================================================
@@ -566,29 +575,7 @@ export default function App() {
           animate={{ opacity: 1 }}
           transition={{ delay: 0.5 }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-            <div>
-              <span className="onlineDot"/>Online
-              <div style={{ fontSize: 11, opacity: 0.7, marginTop: 2 }}>{currentUser.name}</div>
-            </div>
-            <button
-              onClick={() => handleLogout()}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                padding: 6,
-                cursor: 'pointer',
-                color: 'var(--text-inverse)',
-                opacity: 0.7,
-                borderRadius: 8,
-              }}
-              title="Sign out"
-              onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.7'; }}
-            >
-              <LogOut size={16} />
-            </button>
-          </div>
+          <span className="onlineDot"/>Online
         </motion.div>
       </aside>
 
@@ -607,20 +594,27 @@ export default function App() {
               <h1>{tabTitle(tab)}</h1>
             </div>
           </div>
-          <AnimatePresence>
-            {tab === 'sell' && (
-              <motion.div
-                className="headerCart"
-                initial={{ scale: 0, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0, opacity: 0 }}
-                transition={bouncySpring}
-                key="header-cart"
-              >
-                <ShoppingBag size={16}/>{cart.length}
-              </motion.div>
-            )}
-          </AnimatePresence>
+          <div className="headerActions">
+            <AnimatePresence>
+              {tab === 'sell' && (
+                <motion.div
+                  className="headerCart"
+                  initial={{ scale: 0, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0, opacity: 0 }}
+                  transition={bouncySpring}
+                  key="header-cart"
+                >
+                  <ShoppingBag size={16}/>{cart.length}
+                </motion.div>
+              )}
+            </AnimatePresence>
+            <AccountBubble
+              user={currentUser}
+              onManage={() => setShowProfile(true)}
+              onLogout={() => handleLogout()}
+            />
+          </div>
         </motion.header>
 
         <AnimatePresence>
@@ -843,6 +837,15 @@ export default function App() {
               </div>
             </Modal>
           )}
+          {showProfile && (
+            <Modal key="profile" title="Your account"
+              subtitle="Update your name and email, or change how you sign in."
+              close={() => setShowProfile(false)}>
+              <Profile currentUser={currentUser}
+                onUserUpdated={handleUserUpdated}
+                showToast={showToast}/>
+            </Modal>
+          )}
         </AnimatePresence>
 
         {/* Quick Sell FAB */}
@@ -896,6 +899,64 @@ function tabTitle(t: Tab) {
 // ============================================================
 // Nav Button (with layout-animated active indicator)
 // ============================================================
+function AccountBubble({user, onManage, onLogout}: {
+  user: User;
+  onManage: () => void;
+  onLogout: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const letter = (user.name.trim()[0] || '?').toUpperCase();
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  return (
+    <div className="accountBubbleWrap" ref={wrapRef}>
+      <button
+        className="accountBubble"
+        onClick={() => setOpen((v) => !v)}
+        title={user.name}
+        aria-label="Account"
+        aria-expanded={open}
+      >
+        {letter}
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            className="accountMenu"
+            initial={{ opacity: 0, y: -8, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -8, scale: 0.96 }}
+            transition={snappySpring}
+          >
+            <div className="accountMenuHead">
+              <span className="accountBubble" aria-hidden="true">{letter}</span>
+              <div>
+                <strong>{user.name}</strong>
+                <small>{user.email}</small>
+              </div>
+            </div>
+            <button className="accountMenuItem" onClick={() => { setOpen(false); onManage(); }}>
+              Manage account
+            </button>
+            <button className="accountMenuItem" onClick={() => { setOpen(false); onLogout(); }}>
+              <LogOut size={15}/> Sign out
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 function Nav({active, icon, text, onClick, index, isSetup = false}: {
   active: boolean; icon: React.ReactNode; text: string;
   onClick: () => void; index: number; isSetup?: boolean;
@@ -1683,6 +1744,174 @@ function Review({sales, items, bales, revenue, profit, onRefund}: {
         </div>
       </motion.div>
     </section>
+  );
+}
+
+// ============================================================
+// Profile Page
+// ============================================================
+function Profile({currentUser, onUserUpdated, showToast}: {
+  currentUser: User;
+  onUserUpdated: (user: User) => void;
+  showToast: (message: string) => void;
+}) {
+  const [name, setName] = useState(currentUser.name);
+  const [email, setEmail] = useState(currentUser.email);
+  const [savingDetails, setSavingDetails] = useState(false);
+
+  const [newPin, setNewPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [savingPin, setSavingPin] = useState(false);
+
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [savingPassword, setSavingPassword] = useState(false);
+
+  useEffect(() => {
+    setName(currentUser.name);
+    setEmail(currentUser.email);
+  }, [currentUser.name, currentUser.email]);
+
+  const detailsDirty =
+    name.trim() !== currentUser.name ||
+    email.trim().toLowerCase() !== currentUser.email.toLowerCase();
+
+  const saveDetails = async () => {
+    if (!name.trim() || !email.trim() || savingDetails) return;
+    setSavingDetails(true);
+    try {
+      const { data } = await authApi.updateProfile(name.trim(), email.trim());
+      onUserUpdated({ ...currentUser, ...data.user });
+      showToast('Profile saved');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not save profile');
+    } finally {
+      setSavingDetails(false);
+    }
+  };
+
+  const savePin = async () => {
+    if (savingPin) return;
+    if (!/^\d{4,6}$/.test(newPin)) {
+      showToast('PIN must be 4 to 6 digits');
+      return;
+    }
+    if (newPin !== confirmPin) {
+      showToast('PINs do not match');
+      return;
+    }
+    setSavingPin(true);
+    try {
+      await authApi.changePin(newPin);
+      onUserUpdated({ ...currentUser, hasPin: true });
+      setNewPin('');
+      setConfirmPin('');
+      showToast(currentUser.hasPin ? 'PIN updated' : 'PIN set');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not update PIN');
+    } finally {
+      setSavingPin(false);
+    }
+  };
+
+  const savePassword = async () => {
+    if (savingPassword) return;
+    if (!newPassword || newPassword.length < 8) {
+      showToast('New password must be at least 8 characters');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      showToast('Passwords do not match');
+      return;
+    }
+    setSavingPassword(true);
+    try {
+      await authApi.changePassword(currentPassword, newPassword);
+      onUserUpdated({ ...currentUser, hasPassword: true });
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      showToast(currentUser.hasPassword ? 'Password updated' : 'Password set');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not update password');
+    } finally {
+      setSavingPassword(false);
+    }
+  };
+
+  const pinDigits = (value: string) => value.replace(/\D/g, '').slice(0, 6);
+
+  return (
+    <div className="form">
+      <div className="panelHead" style={{ marginBottom: 0 }}>
+        <span className="eyebrow">YOUR DETAILS</span>
+        <span style={{
+          padding: '2px 8px',
+          borderRadius: 4,
+          background: currentUser.role === 'admin' ? 'rgba(168, 85, 247, 0.15)' : 'rgba(59, 130, 246, 0.15)',
+          color: currentUser.role === 'admin' ? '#a855f7' : '#3b82f6',
+          fontSize: 11,
+          fontWeight: 600,
+        }}>{currentUser.role}</span>
+      </div>
+      <Field label="Full name">
+        <input value={name} onChange={(e) => setName(e.target.value)}
+          autoComplete="name"/>
+      </Field>
+      <Field label="Email">
+        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+          autoComplete="email"/>
+      </Field>
+      <motion.button className="primary wide"
+        disabled={!name.trim() || !email.trim() || !detailsDirty || savingDetails}
+        onClick={saveDetails}
+        whileTap={{ scale: 0.97 }}>
+        {savingDetails ? 'Saving…' : 'Save details'}
+      </motion.button>
+
+      <span className="eyebrow" style={{ marginTop: 8 }}>{currentUser.hasPin ? 'CHANGE PIN' : 'SET A PIN'}</span>
+      <Field label="New PIN">
+        <input inputMode="numeric" autoComplete="new-password"
+          value={newPin} onChange={(e) => setNewPin(pinDigits(e.target.value))}
+          placeholder="4 to 6 digits"/>
+      </Field>
+      <Field label="Confirm PIN">
+        <input inputMode="numeric" autoComplete="new-password"
+          value={confirmPin} onChange={(e) => setConfirmPin(pinDigits(e.target.value))}
+          placeholder="Repeat PIN"/>
+      </Field>
+      <motion.button className="primary wide"
+        disabled={newPin.length < 4 || confirmPin.length < 4 || savingPin}
+        onClick={savePin}
+        whileTap={{ scale: 0.97 }}>
+        {savingPin ? 'Saving…' : currentUser.hasPin ? 'Update PIN' : 'Set PIN'}
+      </motion.button>
+
+      <span className="eyebrow" style={{ marginTop: 8 }}>{currentUser.hasPassword ? 'CHANGE PASSWORD' : 'SET A PASSWORD'}</span>
+      {currentUser.hasPassword && (
+        <Field label="Current password">
+          <input type="password" autoComplete="current-password"
+            value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)}/>
+        </Field>
+      )}
+      <Field label="New password">
+        <input type="password" autoComplete="new-password"
+          value={newPassword} onChange={(e) => setNewPassword(e.target.value)}
+          placeholder="At least 8 characters"/>
+      </Field>
+      <Field label="Confirm password">
+        <input type="password" autoComplete="new-password"
+          value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)}
+          placeholder="Repeat password"/>
+      </Field>
+      <motion.button className="primary wide"
+        disabled={!newPassword || !confirmPassword || savingPassword}
+        onClick={savePassword}
+        whileTap={{ scale: 0.97 }}>
+        {savingPassword ? 'Saving…' : currentUser.hasPassword ? 'Update password' : 'Set password'}
+      </motion.button>
+    </div>
   );
 }
 

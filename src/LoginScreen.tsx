@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, type Variants } from 'framer-motion';
-import { authApi, type User } from './api';
+import { api, authApi, type User } from './api';
 import {
   bouncySpring, smoothSpring,
   pageVariants, staggerContainer, staggerItem,
@@ -170,11 +170,11 @@ export function LoginScreen({ onLogin }: { onLogin: (user: User) => void }) {
   const [loading, setLoading] = useState(false);
   const [forgotMode, setForgotMode] = useState(false);
 
-  // Load available users for PIN mode
+  // Public bootstrap lists only active users — deactivated people stay off the PIN picker
   useEffect(() => {
     if (mode === 'pin') {
-      authApi.listUsers()
-        .then((r) => setUsers(r.data))
+      api.get<{ users: User[] }>('/api/bootstrap')
+        .then((r) => setUsers(r.data.users || []))
         .catch(() => setUsers([]));
     }
   }, [mode]);
@@ -496,6 +496,8 @@ function ActionButton({ onClick, disabled, label }: { onClick: () => void; disab
 // PIN pad
 // ============================================================
 function PinPad({ value, onChange, disabled }: { value: string; onChange: (v: string) => void; disabled: boolean }) {
+  const rootRef = useRef<HTMLDivElement>(null);
+
   const handleDigit = (digit: string) => {
     if (disabled) return;
     if (value.length < 4) onChange(value + digit);
@@ -505,8 +507,35 @@ function PinPad({ value, onChange, disabled }: { value: string; onChange: (v: st
     onChange(value.slice(0, -1));
   };
 
+  useEffect(() => {
+    rootRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (disabled) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+      if (e.key >= '0' && e.key <= '9') {
+        e.preventDefault();
+        handleDigit(e.key);
+      } else if (e.key === 'Backspace' || e.key === 'Delete') {
+        e.preventDefault();
+        handleDelete();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [disabled, value, onChange]);
+
   return (
-    <div className="mt-2">
+    <div
+      className="mt-2 outline-none"
+      ref={rootRef}
+      tabIndex={0}
+      aria-label="Enter your PIN"
+    >
       {/* PIN display */}
       <div className="flex justify-center gap-3 mb-4">
         {[0, 1, 2, 3].map((i) => (
@@ -539,6 +568,7 @@ function PinButton({ label, onPress, disabled, icon }: { label: string; onPress:
   return (
     <motion.button
       whileTap={disabled ? undefined : { scale: 0.95 }}
+      type="button"
       onClick={onPress}
       disabled={disabled}
       className="rounded-2xl py-4 text-xl font-semibold flex items-center justify-center"

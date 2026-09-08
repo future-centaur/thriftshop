@@ -354,6 +354,102 @@ body {
   border-radius: var(--radius-md);
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.accountBubbleWrap {
+  position: relative;
+}
+
+.accountBubble {
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-secondary) 100%);
+  color: white;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: var(--shadow-glow);
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+button.accountBubble:hover {
+  transform: scale(1.05);
+}
+
+.accountMenu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: 260px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xl);
+  padding: 10px;
+  z-index: 40;
+}
+
+.accountMenuHead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 8px 12px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+
+.accountMenuHead .accountBubble {
+  width: 40px;
+  height: 40px;
+  font-size: 16px;
+  cursor: default;
+  box-shadow: none;
+}
+
+.accountMenuHead strong {
+  display: block;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.accountMenuHead small {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  word-break: break-all;
+}
+
+.accountMenuItem {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 10px 10px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.accountMenuItem:hover {
+  background: var(--bg-secondary);
+}
+
 .headerCart {
   display: flex;
   align-items: center;
