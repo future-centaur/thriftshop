@@ -52,7 +52,14 @@ export const api = {
 
 // ── Auth API ────────────────────────────────────────────────────────────────────
 
-export type User = { id: string; name: string; email: string; role: 'admin' | 'attendant' };
+export type User = {
+    id: string;
+    name: string;
+    email: string;
+    role: 'admin' | 'attendant';
+    hasPin?: boolean;
+    hasPassword?: boolean;
+};
 
 export type SessionInfo = {
     user: User | null;
@@ -88,6 +95,11 @@ export const authApi = {
     /** Change own password */
     changePassword(currentPassword: string, newPassword: string): Promise<ApiResponse<{ ok: boolean }>> {
         return api.patch<{ ok: boolean }>('/api/auth/password', { currentPassword, newPassword });
+    },
+
+    /** Update own name and email */
+    updateProfile(name: string, email: string): Promise<ApiResponse<{ user: User }>> {
+        return api.patch<{ user: User }>('/api/auth/profile', { name, email });
     },
 
     /** Request a password reset email */
