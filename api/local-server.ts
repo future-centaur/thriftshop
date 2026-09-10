@@ -7,7 +7,7 @@ import { serve } from '@hono/node-server';
 import { cors } from 'hono/cors';
 import { getCookie } from 'hono/cookie';
 import { HTTPException } from 'hono/http-exception';
-import type { AuthVariables, SessionUser } from '../backend/infrastructure/auth';
+import type { AuthVariables, SessionUser } from '../backend/infrastructure/auth.js';
 import {
     bootstrap,
     createBale,
@@ -41,10 +41,10 @@ import {
     deactivateUser,
     updateUserRole,
     deleteSession,
-} from '../backend/business';
-import { attachSessionCookie, clearSessionCookie, validateSession } from '../backend/infrastructure/auth';
-import { database } from '../backend/infrastructure/database';
-import { runMigrations } from '../backend/infrastructure/migrations';
+} from '../backend/business.js';
+import { attachSessionCookie, clearSessionCookie, validateSession } from '../backend/infrastructure/auth.js';
+import { database } from '../backend/infrastructure/database.js';
+import { runMigrations } from '../backend/infrastructure/migrations.js';
 
 type ApiResult<T = unknown> = { data?: T; error?: string; status?: number };
 

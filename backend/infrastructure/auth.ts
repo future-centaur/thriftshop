@@ -1,7 +1,7 @@
 import { Context, Next } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { HTTPException } from 'hono/http-exception';
-import type { Database } from './database';
+import type { Database } from './database.js';
 
 const SESSION_COOKIE = 'session_id';
 const SESSION_MAX_AGE = 30 * 24 * 60 * 60;

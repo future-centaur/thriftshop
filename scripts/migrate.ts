@@ -3,7 +3,7 @@
 //
 // Usage:  pnpm migrate
 
-import { runMigrations } from '../backend/infrastructure/migrations';
+import { runMigrations } from '../backend/infrastructure/migrations.js';
 
 runMigrations()
     .then(() => process.exit(0))

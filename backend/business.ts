@@ -1,5 +1,5 @@
-import { database } from './infrastructure/database';
-import { objectStorage } from './infrastructure/storage';
+import { database } from './infrastructure/database.js';
+import { objectStorage } from './infrastructure/storage.js';
 import {
     generateToken,
     generatePin,
@@ -7,7 +7,7 @@ import {
     hashPin,
     verifyPassword,
     verifyPin,
-} from './infrastructure/auth';
+} from './infrastructure/auth.js';
 
 type R = Record<string, unknown>;
 
