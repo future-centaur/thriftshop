@@ -93,6 +93,7 @@ export default function App() {
   const [qualityLevels, setQualityLevels] = useState<string[]>([]);
   const [qualityRecords, setQualityRecords] = useState<{id:string;name:string}[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<{id: string; message: string}[]>([]);
   const [menu, setMenu] = useState(false);
 
@@ -130,6 +131,7 @@ export default function App() {
     const showSplash = opts?.splash === true;
     const started = Date.now();
     if (showSplash) setLoading(true);
+    setLoadError(null);
     try {
       // Session and shop data run in parallel. Logged-out users return as soon as
       // the session check finishes — they don't wait for the full bootstrap.
@@ -180,6 +182,8 @@ export default function App() {
         const wait = BOOT_SPLASH_MS - (Date.now() - started);
         if (wait > 0) await new Promise((resolve) => window.setTimeout(resolve, wait));
       }
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : 'Could not reach the server. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -534,6 +538,25 @@ export default function App() {
           </motion.span>
         </motion.div>
       </motion.div>
+    );
+  }
+
+  // ============================================================
+  // Load error screen — shown if the session/bootstrap request failed,
+  // so a server hiccup never leaves the user staring at a blank screen.
+  // ============================================================
+  if (loadError && isFirstRun === null) {
+    return (
+      <div className="loading">
+        <div className="logoMark">A</div>
+        <div style={{ textAlign: 'center', maxWidth: 320 }}>
+          <strong style={{ display: 'block', marginBottom: 8 }}>Couldn't load AliBeka</strong>
+          <span style={{ display: 'block', opacity: 0.8, marginBottom: 16 }}>{loadError}</span>
+          <button onClick={() => { void refresh({ splash: true }); }}>
+            Try again
+          </button>
+        </div>
+      </div>
     );
   }
 
