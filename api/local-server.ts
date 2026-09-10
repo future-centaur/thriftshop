@@ -39,8 +39,10 @@ import {
     listUsers,
     createUser,
     deactivateUser,
+    updateUserRole,
+    deleteSession,
 } from '../backend/business';
-import { validateSession } from '../backend/infrastructure/auth';
+import { attachSessionCookie, clearSessionCookie, validateSession } from '../backend/infrastructure/auth';
 import { database } from '../backend/infrastructure/database';
 import { runMigrations } from '../backend/infrastructure/migrations';
 
@@ -68,14 +70,19 @@ function error(status: number, message: string): Response {
 // ── Auth middleware ──────────────────────────────────────────────────────────
 
 const PUBLIC_PATHS = new Set([
-    '/api/_healthcheck',
-    '/api/bootstrap',
-    '/api/auth/session',
-    '/api/auth/login',
-    '/api/auth/forgot-password',
-    '/api/auth/reset-password',
-    '/api/auth/register-first-admin',
+    '/_healthcheck',
+    '/bootstrap',
+    '/auth/session',
+    '/auth/login',
+    '/auth/logout',
+    '/auth/forgot-password',
+    '/auth/reset-password',
+    '/auth/register-first-admin',
 ]);
+
+function isPublicPath(path: string): boolean {
+    return PUBLIC_PATHS.has(path) || PUBLIC_PATHS.has(path.replace(/^\/api/, '') || '/');
+}
 
 const ADMIN_ONLY_PATHS = new Set([
     '/bales',
@@ -91,7 +98,7 @@ async function authMiddleware(c: Context<{ Variables: AuthVariables }>, next: Ne
     const path = c.req.path;
     const token = getCookie(c, 'session_id');
 
-    if (PUBLIC_PATHS.has(path)) return next();
+    if (isPublicPath(path)) return next();
 
     if (path === '/expenses' || path.startsWith('/expenses')) {
         if (!token) throw new HTTPException(401, { message: 'Not authenticated. Please log in.' });
@@ -159,28 +166,27 @@ app.post('/auth/login', async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const result = await login(body);
     if (result.error) return respond(result);
-    const { token } = result.data!;
-    c.header('Set-Cookie',
-        `session_id=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${30 * 24 * 60 * 60}`);
-    return respond(result);
+    const { token, user } = result.data!;
+    attachSessionCookie(c, token);
+    return c.json({ user, token });
 });
 
 app.post('/auth/logout', async (c) => {
-    const { deleteSession } = await import('../backend/business');
-    const sessionId = c.get('sessionId') as string;
-    if (sessionId) await deleteSession(sessionId);
-    c.header('Set-Cookie', `session_id=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
-    return respond({ data: { ok: true } });
+    const token = getCookie(c, 'session_id');
+    if (token) {
+        try { await deleteSession(token); } catch { /* still clear the cookie */ }
+    }
+    clearSessionCookie(c);
+    return c.json({ ok: true });
 });
 
 app.post('/auth/register-first-admin', async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const result = await registerFirstAdmin(body);
     if (result.error) return respond(result);
-    const { token } = result.data!;
-    c.header('Set-Cookie',
-        `session_id=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${30 * 24 * 60 * 60}`);
-    return respond(result);
+    const { token, user } = result.data!;
+    attachSessionCookie(c, token);
+    return c.json({ user, token });
 });
 
 app.patch('/auth/pin', async (c) => {
@@ -335,6 +341,14 @@ app.delete('/users/:id', async (c) => {
     return respond({ data: { ok: true } });
 });
 
+app.patch('/users/:id', async (c) => {
+    const user = c.get('user') as SessionUser;
+    const body = await c.req.json().catch(() => ({}));
+    const result = await updateUserRole(c.req.param('id'), body, user);
+    if (result.error) return respond(result);
+    return respond(result);
+});
+
 // ── Start server ────────────────────────────────────────────────────────────
 
 const port = Number(process.env.PORT ?? 3002);
@@ -345,6 +359,10 @@ const port = Number(process.env.PORT ?? 3002);
         serve({ fetch: app.fetch, port }, (info) => {
             console.log(`🚀 API server listening on http://localhost:${info.port}`);
         });
+        // Neon suspends idle computes; a cheap ping keeps the first page load from waiting on a wake.
+        const keepNeonWarm = () => database.list('meta', { limit: 1 }).catch(() => {});
+        keepNeonWarm();
+        setInterval(keepNeonWarm, 4 * 60 * 1000);
     } catch (e) {
         console.error('Failed to start API server:', e);
         process.exit(1);

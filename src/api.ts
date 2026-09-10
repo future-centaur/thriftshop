@@ -57,6 +57,7 @@ export type User = {
     name: string;
     email: string;
     role: 'admin' | 'attendant';
+    active?: boolean;
     hasPin?: boolean;
     hasPassword?: boolean;
 };
@@ -125,5 +126,10 @@ export const authApi = {
     /** Deactivate a user (admin only) */
     deactivateUser(userId: string): Promise<ApiResponse<{ ok: boolean }>> {
         return api.delete<{ ok: boolean }>(`/api/users/${userId}`);
+    },
+
+    /** Change a user's role (admin only) */
+    updateUserRole(userId: string, role: User['role']): Promise<ApiResponse<User>> {
+        return api.patch<User>(`/api/users/${userId}`, { role });
     },
 };

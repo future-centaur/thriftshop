@@ -34,8 +34,10 @@ import {
     listUsers,
     createUser,
     deactivateUser,
+    updateUserRole,
+    deleteSession,
 } from '../backend/business';
-import { validateSession } from '../backend/infrastructure/auth';
+import { attachSessionCookie, clearSessionCookie, validateSession } from '../backend/infrastructure/auth';
 import { database } from '../backend/infrastructure/database';
 
 type ApiResult<T = unknown> = { data?: T; error?: string; status?: number };
@@ -61,15 +63,21 @@ function error(status: number, message: string): Response {
 
 // ── Auth middleware ──────────────────────────────────────────────────────────
 
-// Paths that don't require authentication
+// Paths that don't require authentication (match with or without the /api prefix)
 const PUBLIC_PATHS = new Set([
     '/_healthcheck',
     '/bootstrap',
+    '/auth/session',
     '/auth/login',
+    '/auth/logout',
     '/auth/forgot-password',
     '/auth/reset-password',
     '/auth/register-first-admin',
 ]);
+
+function isPublicPath(path: string): boolean {
+    return PUBLIC_PATHS.has(path) || PUBLIC_PATHS.has(path.replace(/^\/api/, '') || '/');
+}
 
 // Paths that require admin role (beyond basic auth)
 const ADMIN_ONLY_PATHS = new Set([
@@ -87,7 +95,7 @@ async function authMiddleware(c: Context<{ Variables: AuthVariables }>, next: Ne
     const getSessionId = () => getCookie(c, 'session_id');
 
     // Allow public paths through without auth
-    if (PUBLIC_PATHS.has(path)) {
+    if (isPublicPath(path)) {
         return next();
     }
 
@@ -171,19 +179,19 @@ app.post('/auth/login', async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const result = await login(body);
     if (result.error) return respond(result);
-    const { token } = result.data!;
-    c.header('Set-Cookie',
-        `session_id=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${30 * 24 * 60 * 60}`);
-    return respond(result);
+    const { token, user } = result.data!;
+    attachSessionCookie(c, token);
+    return c.json({ user, token });
 });
 
 // POST /api/auth/logout
 app.post('/auth/logout', async (c) => {
-    const { deleteSession } = await import('../backend/business');
-    const sessionId = c.get('sessionId');
-    if (sessionId) await deleteSession(String(sessionId));
-    c.header('Set-Cookie', `session_id=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
-    return respond({ data: { ok: true } });
+    const token = getCookie(c, 'session_id');
+    if (token) {
+        try { await deleteSession(token); } catch { /* still clear the cookie */ }
+    }
+    clearSessionCookie(c);
+    return c.json({ ok: true });
 });
 
 // POST /api/auth/register-first-admin  — first-run wizard
@@ -191,10 +199,9 @@ app.post('/auth/register-first-admin', async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const result = await registerFirstAdmin(body);
     if (result.error) return respond(result);
-    const { token } = result.data!;
-    c.header('Set-Cookie',
-        `session_id=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${30 * 24 * 60 * 60}`);
-    return respond(result);
+    const { token, user } = result.data!;
+    attachSessionCookie(c, token);
+    return c.json({ user, token });
 });
 
 // PATCH /api/auth/pin  — change own PIN
@@ -368,6 +375,14 @@ app.delete('/users/:id', async (c) => {
     const result = await deactivateUser(c.req.param('id'), user);
     if (result.error) return respond(result);
     return respond({ data: { ok: true } });
+});
+
+app.patch('/users/:id', async (c) => {
+    const user = c.get('user') as SessionUser;
+    const body = await c.req.json().catch(() => ({}));
+    const result = await updateUserRole(c.req.param('id'), body, user);
+    if (result.error) return respond(result);
+    return respond(result);
 });
 
 // ── Export ─────────────────────────────────────────────────────────────────

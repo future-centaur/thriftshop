@@ -1855,6 +1855,7 @@ button:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  overflow: visible;
 }
 
 .qualityManageRow {
@@ -1864,12 +1865,60 @@ button:focus-visible {
   padding: 10px 14px;
   background: var(--bg-secondary);
   border-radius: var(--radius-md);
+  position: relative;
+  overflow: visible;
 }
 
 .qualityManageRow span {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.rowMenuWrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.rowMenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 200px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xl);
+  padding: 6px;
+  z-index: 50;
+}
+
+.rowMenuItem {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 10px 10px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rowMenuItem:hover {
+  background: var(--bg-secondary);
+}
+
+.rowMenuItem.danger {
+  color: var(--error);
+}
+
+.rowMenuItem.danger:hover {
+  background: var(--error-light);
 }
 
 .qualityHint {

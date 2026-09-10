@@ -1,7 +1,30 @@
 import { Context, Next } from 'hono';
-import { getCookie } from 'hono/cookie';
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { HTTPException } from 'hono/http-exception';
 import type { Database } from './database';
+
+const SESSION_COOKIE = 'session_id';
+const SESSION_MAX_AGE = 30 * 24 * 60 * 60;
+
+function sessionCookieOpts(c: Context) {
+    return {
+        httpOnly: true,
+        sameSite: 'Strict' as const,
+        path: '/',
+        secure: c.req.url.startsWith('https://'),
+    };
+}
+
+export function attachSessionCookie(c: Context, token: string): void {
+    setCookie(c, SESSION_COOKIE, token, {
+        ...sessionCookieOpts(c),
+        maxAge: SESSION_MAX_AGE,
+    });
+}
+
+export function clearSessionCookie(c: Context): void {
+    deleteCookie(c, SESSION_COOKIE, sessionCookieOpts(c));
+}
 
 export type SessionUser = {
     id: string;

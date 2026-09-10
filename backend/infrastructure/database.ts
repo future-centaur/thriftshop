@@ -271,7 +271,9 @@ export const database: Database = {
         validateTable(table);
         const sql = getClient();
         const t = quoteIdent(table);
-        const result = await sql(`DELETE FROM ${t} WHERE id = ANY($1::uuid[])`, [ids]);
+        // Sessions use a 64-char hex TEXT primary key; other tables use UUID.
+        // Compare as text so both kinds of id delete correctly.
+        await sql(`DELETE FROM ${t} WHERE id::text = ANY($1::text[])`, [ids]);
         return ids.map(() => true);
     },
 };

@@ -110,8 +110,7 @@ async function ensureSeed() {
 }
 
 export async function bootstrap() {
-    await ensureSeed();
-    const [rawItems, bales, rules, sales, cats, qs, expenses, expenseCats, users] = await Promise.all([
+    let [rawItems, bales, rules, sales, cats, qs, expenses, expenseCats, users] = await Promise.all([
         list(tables.items),
         list(tables.bales),
         list(tables.rules),
@@ -122,6 +121,10 @@ export async function bootstrap() {
         list(tables.expenseCategories),
         list(tables.users),
     ]);
+    if (!cats.length || !qs.length) {
+        await ensureSeed();
+        [cats, qs] = await Promise.all([list(tables.categories), list(tables.qualities)]);
+    }
     const items = await addPhotoUrls(rawItems);
     const categories = cats.filter((c) => c.active !== false).map((c) => String(c.name)).sort();
     const qualities = qs.filter((q) => q.active !== false).map((q) => String(q.name));
@@ -728,18 +731,21 @@ export async function registerFirstAdmin(body: R): Promise<{ data?: AuthSuccess;
 // === Auth: get current session ===
 
 export async function getSession(token?: string): Promise<{ user: R | null; isSetup: boolean }> {
-    if (!token) return { user: null, isSetup: false };
+    const { items: anyUsers } = await database.list<R>(tables.users, { limit: 1 });
+    const isSetup = anyUsers.length > 0;
+    if (!token) return { user: null, isSetup };
+
     const { items: sessions } = await database.list<R>(tables.sessions, {
         filter: { id: token },
         limit: 1,
     });
     const session = sessions[0];
-    if (!session) return { user: null, isSetup: false };
+    if (!session) return { user: null, isSetup };
 
     // Check expiry
     if (new Date(String(session.expiresAt)) < new Date()) {
         await database.delete(tables.sessions, [String(session.id)]);
-        return { user: null, isSetup: false };
+        return { user: null, isSetup };
     }
 
     const { items: users } = await database.list<R>(tables.users, {
@@ -747,11 +753,11 @@ export async function getSession(token?: string): Promise<{ user: R | null; isSe
         limit: 1,
     });
     const user = users[0];
-    if (!user) return { user: null, isSetup: false };
+    if (!user) return { user: null, isSetup };
 
     return {
         user: toSessionUser(user),
-        isSetup: true,
+        isSetup,
     };
 }
 
@@ -955,6 +961,12 @@ export async function createUser(
     };
 }
 
+async function isLastActiveAdmin(userId: string): Promise<boolean> {
+    const { items } = await database.list<R>(tables.users, { limit: 100 });
+    const activeAdmins = items.filter((u) => u.role === 'admin' && u.active !== false);
+    return activeAdmins.length <= 1 && activeAdmins.some((u) => String(u.id) === userId);
+}
+
 export async function deactivateUser(
     userId: string,
     actingUser: { id: string; role: string }
@@ -969,6 +981,10 @@ export async function deactivateUser(
     const user = users[0];
     if (!user) return { error: 'User not found', status: 404 };
 
+    if (user.role === 'admin' && await isLastActiveAdmin(userId)) {
+        return { error: 'You cannot remove the last admin', status: 400 };
+    }
+
     await database.update(tables.users, [{
         id: userId,
         record: { active: false },
@@ -982,4 +998,41 @@ export async function deactivateUser(
         await database.delete(tables.sessions, sessions.map((s) => String(s.id)));
     }
     return {};
+}
+
+export async function updateUserRole(
+    userId: string,
+    body: R,
+    actingUser: { id: string; role: string }
+): Promise<{ data?: R; error?: string; status?: number }> {
+    if (actingUser.role !== 'admin') return { error: 'Admin access required', status: 403 };
+    if (actingUser.id === userId) return { error: 'You cannot change your own role', status: 400 };
+
+    const requestedRole = body.role as string | undefined;
+    if (requestedRole !== 'admin' && requestedRole !== 'attendant') {
+        return { error: 'Role must be admin or attendant', status: 400 };
+    }
+
+    const { items: users } = await database.list<R>(tables.users, {
+        filter: { id: userId },
+        limit: 1,
+    });
+    const user = users[0];
+    if (!user) return { error: 'User not found', status: 404 };
+    if (user.active === false) return { error: 'Cannot change role of an inactive person', status: 400 };
+
+    if (user.role === requestedRole) {
+        return { data: publicUser(user) };
+    }
+
+    if (user.role === 'admin' && requestedRole === 'attendant' && await isLastActiveAdmin(userId)) {
+        return { error: 'You cannot change the last admin to attendant', status: 400 };
+    }
+
+    await database.update(tables.users, [{
+        id: userId,
+        record: { role: requestedRole },
+    }]);
+
+    return { data: publicUser({ ...user, role: requestedRole }) };
 }

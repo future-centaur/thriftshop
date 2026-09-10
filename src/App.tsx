@@ -5,7 +5,7 @@ import type {User} from './api';
 import {LoginScreen, FirstRunWizard} from './LoginScreen';
 import {
   ArrowRight, BarChart3, Banknote, Camera, Check, ChevronRight,
-  Edit3, Layers3, LogOut, Menu, Package, Plus, Search, ShoppingBag,
+  Edit3, Layers3, LogOut, Menu, MoreVertical, Package, Plus, Search, ShoppingBag,
   Smartphone, Tag, WalletCards, X,
 } from 'lucide-react';
 import {
@@ -52,6 +52,7 @@ type ExpenseCategory = { id: string; name: string };
 // Auth & idle lock constants
 // ============================================================
 const IDLE_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+const BOOT_SPLASH_MS = 3000;
 
 // ============================================================
 // CountUp: smoothly animates a number to its target value
@@ -125,10 +126,15 @@ export default function App() {
   // ============================================================
   // Data fetching
   // ============================================================
-  const refresh = async () => {
-    setLoading(true);
+  const refresh = async (opts?: { splash?: boolean }) => {
+    const showSplash = opts?.splash === true;
+    const started = Date.now();
+    if (showSplash) setLoading(true);
     try {
-      const r = await api.get<{
+      // Session and shop data run in parallel. Logged-out users return as soon as
+      // the session check finishes — they don't wait for the full bootstrap.
+      const sessionPromise = authApi.getSession();
+      const bootstrapPromise = api.get<{
         isSetup: boolean; users: User[];
         items: Item[]; bales: Bale[]; rules: Rule[]; sales: Sale[];
         categories: string[]; qualities: string[];
@@ -136,29 +142,27 @@ export default function App() {
         expenses: Expense[];
         expenseCategories: ExpenseCategory[];
       }>('/api/bootstrap');
-      const d = r.data;
 
-      // If no users exist, this is a first-run — skip normal auth flow
-      if (!d.isSetup) {
+      const session = await sessionPromise;
+      if (!session.data.isSetup) {
+        void bootstrapPromise.catch(() => {});
         setIsFirstRun(true);
-        setLoading(false);
+        setCurrentUser(null);
         return;
       }
-
-      // Get session to confirm auth
-      const session = await authApi.getSession();
       if (!session.data.user) {
+        void bootstrapPromise.catch(() => {});
         setIsFirstRun(false);
         setCurrentUser(null);
-        setLoading(false);
         return;
       }
 
+      const r = await bootstrapPromise;
+      const d = r.data;
       setCurrentUser(session.data.user);
       setIsFirstRun(false);
       setUsers(d.users || []);
 
-      // Admin sees all expenses; attendant sees only their own
       const isAdmin = session.data.user.role === 'admin';
       const filteredExpenses = isAdmin
         ? d.expenses
@@ -169,53 +173,18 @@ export default function App() {
       setQualityLevels(d.qualities || []);
       setQualityRecords(d.qualityRecords || []);
       setExpenses(filteredExpenses);
-      setAllExpenses(d.expenses); // admin: all expenses for filter
+      setAllExpenses(d.expenses);
       setExpenseCategories(d.expenseCategories || []);
+
+      if (showSplash) {
+        const wait = BOOT_SPLASH_MS - (Date.now() - started);
+        if (wait > 0) await new Promise((resolve) => window.setTimeout(resolve, wait));
+      }
     } finally {
       setLoading(false);
     }
   };
-  useEffect(() => { refresh(); }, []);
-
-  // ============================================================
-  // Idle auto-lock: log out after 15 min of inactivity
-  // ============================================================
-  useEffect(() => {
-    if (!currentUser) return;
-
-    let timer: number | null = null;
-    const resetTimer = () => {
-      if (timer) window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        handleLogout(true);
-      }, IDLE_TIMEOUT_MS);
-    };
-    const events = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'click'];
-    events.forEach((e) => window.addEventListener(e, resetTimer, { passive: true }));
-    resetTimer();
-    return () => {
-      if (timer) window.clearTimeout(timer);
-      events.forEach((e) => window.removeEventListener(e, resetTimer));
-    };
-  }, [currentUser]);
-
-  const handleLogout = async (idle: boolean = false) => {
-    try {
-      await authApi.logout();
-    } catch {
-      // Even if the API call fails, clear local state
-    }
-    setCurrentUser(null);
-    setShowProfile(false);
-    setIsFirstRun(false);
-    setItems([]); setBales([]); setRules([]); setSales([]);
-    setCategories([]); setQualityLevels([]); setQualityRecords([]);
-    setExpenses([]); setExpenseCategories([]);
-    setTab('home');
-    if (idle) {
-      showToast('Signed out due to inactivity');
-    }
-  };
+  useEffect(() => { void refresh({ splash: true }); }, []);
 
   // ============================================================
   // Toast system
@@ -227,6 +196,47 @@ export default function App() {
       setToasts((t) => t.filter((x) => x.id !== id));
     }, 2500);
   }, []);
+
+  const handleLogout = useCallback(async (idle: boolean = false) => {
+    setCurrentUser(null);
+    setShowProfile(false);
+    setIsFirstRun(false);
+    setItems([]); setBales([]); setRules([]); setSales([]);
+    setCategories([]); setQualityLevels([]); setQualityRecords([]);
+    setExpenses([]); setExpenseCategories([]);
+    setUsers([]);
+    setAllExpenses([]);
+    setCart([]);
+    setTab('home');
+    if (idle) showToast('Signed out due to inactivity');
+    try {
+      await authApi.logout();
+    } catch {
+      // Cookie/session cleanup is best-effort; local state is already cleared
+    }
+  }, [showToast]);
+
+  // ============================================================
+  // Idle auto-lock: log out after 15 min of inactivity
+  // ============================================================
+  useEffect(() => {
+    if (!currentUser) return;
+
+    let timer: number | null = null;
+    const resetTimer = () => {
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        void handleLogout(true);
+      }, IDLE_TIMEOUT_MS);
+    };
+    const events = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'click'];
+    events.forEach((e) => window.addEventListener(e, resetTimer, { passive: true }));
+    resetTimer();
+    return () => {
+      if (timer) window.clearTimeout(timer);
+      events.forEach((e) => window.removeEventListener(e, resetTimer));
+    };
+  }, [currentUser, handleLogout]);
 
   // ============================================================
   // Derived state
@@ -464,13 +474,27 @@ export default function App() {
   };
 
   const deactivateUserHandler = async (userId: string, name: string) => {
-    if (!window.confirm(`Deactivate ${name}? They will no longer be able to sign in.`)) return;
+    if (!window.confirm(`Remove ${name}? They will no longer be able to sign in.`)) return;
     try {
       await authApi.deactivateUser(userId);
       await refreshUsers();
-      showToast(`${name} deactivated`);
+      showToast(`${name} removed`);
     } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Could not deactivate user');
+      showToast(e instanceof Error ? e.message : 'Could not remove person');
+    }
+  };
+
+  const updateUserRoleHandler = async (userId: string, name: string, role: User['role']) => {
+    const confirmMsg = role === 'admin'
+      ? `Make ${name} an admin? They will have full access to Setup, people, and reports.`
+      : `Change ${name} to attendant? They will lose access to Setup and reports.`;
+    if (!window.confirm(confirmMsg)) return;
+    try {
+      await authApi.updateUserRole(userId, role);
+      await refreshUsers();
+      showToast(role === 'admin' ? `${name} is now an admin` : `${name} is now an attendant`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not change user type');
     }
   };
 
@@ -519,11 +543,11 @@ export default function App() {
   if (isFirstRun === null) return null; // still checking session
 
   if (isFirstRun) {
-    return <FirstRunWizard onSuccess={(user) => { setCurrentUser(user); setIsFirstRun(false); }} />;
+    return <FirstRunWizard onSuccess={() => { void refresh({ splash: true }); }} />;
   }
 
   if (!currentUser) {
-    return <LoginScreen onLogin={(user) => { setCurrentUser(user); }} />;
+    return <LoginScreen onLogin={() => { void refresh({ splash: true }); }} />;
   }
 
   // ============================================================
@@ -693,6 +717,7 @@ export default function App() {
                 onDeleteQuality={deleteQuality}
                 users={users} currentUser={currentUser}
                 deactivateUserHandler={deactivateUserHandler}
+                updateUserRoleHandler={updateUserRoleHandler}
                 setShowAddUser={setShowAddUser}/>
             )}
           </motion.div>
@@ -947,7 +972,7 @@ function AccountBubble({user, onManage, onLogout}: {
             <button className="accountMenuItem" onClick={() => { setOpen(false); onManage(); }}>
               Manage account
             </button>
-            <button className="accountMenuItem" onClick={() => { setOpen(false); onLogout(); }}>
+            <button type="button" className="accountMenuItem" onClick={() => { setOpen(false); onLogout(); }}>
               <LogOut size={15}/> Sign out
             </button>
           </motion.div>
@@ -1916,9 +1941,79 @@ function Profile({currentUser, onUserUpdated, showToast}: {
 }
 
 // ============================================================
+// Person row menu (Setup → People)
+// ============================================================
+function PersonRowMenu({
+  canDemote,
+  isAttendant,
+  onMakeAdmin,
+  onMakeAttendant,
+  onRemove,
+}: {
+  canDemote: boolean;
+  isAttendant: boolean;
+  onMakeAdmin: () => void;
+  onMakeAttendant: () => void;
+  onRemove: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  return (
+    <div className="rowMenuWrap" ref={wrapRef}>
+      <motion.button
+        className="iconBtn"
+        title="More actions"
+        aria-label="More actions"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        whileHover={{ scale: 1.1 }}
+        whileTap={{ scale: 0.9 }}
+      >
+        <MoreVertical size={15}/>
+      </motion.button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            className="rowMenu"
+            initial={{ opacity: 0, y: -8, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -8, scale: 0.96 }}
+            transition={snappySpring}
+          >
+            {isAttendant && (
+              <button className="rowMenuItem" onClick={() => { setOpen(false); onMakeAdmin(); }}>
+                Make admin
+              </button>
+            )}
+            {!isAttendant && canDemote && (
+              <button className="rowMenuItem" onClick={() => { setOpen(false); onMakeAttendant(); }}>
+                Change to attendant
+              </button>
+            )}
+            <button className="rowMenuItem danger" onClick={() => { setOpen(false); onRemove(); }}>
+              Remove person
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ============================================================
 // Setup Page
 // ============================================================
-function Setup({categories, rules, qualityLevels, qualityRecords, onCat, onRule, onEditRule, onCreateQuality, onDeleteQuality, users, currentUser, deactivateUserHandler, setShowAddUser}: {
+function Setup({categories, rules, qualityLevels, qualityRecords, onCat, onRule, onEditRule, onCreateQuality, onDeleteQuality, users, currentUser, deactivateUserHandler, updateUserRoleHandler, setShowAddUser}: {
   categories: string[]; rules: Rule[]; qualityLevels: string[];
   qualityRecords: {id: string; name: string}[];
   onCat: () => void; onRule: () => void; onEditRule: (r: Rule) => void;
@@ -1926,10 +2021,12 @@ function Setup({categories, rules, qualityLevels, qualityRecords, onCat, onRule,
   onDeleteQuality: (id: string) => Promise<void>;
   users: User[]; currentUser: User | null;
   deactivateUserHandler: (userId: string, name: string) => void;
+  updateUserRoleHandler: (userId: string, name: string, role: User['role']) => void;
   setShowAddUser: (v: boolean) => void;
 }) {
   const [open, setOpen] = useState<string | null>(categories[0] || null);
   const [newQuality, setNewQuality] = useState('');
+  const activeAdminCount = users.filter((p) => p.role === 'admin' && p.active !== false).length;
 
   return (
     <section>
@@ -2075,7 +2172,11 @@ function Setup({categories, rules, qualityLevels, qualityRecords, onCat, onRule,
           </div>
           <p>Admins see everything. Attendants work the floor — bales, items, sales, their own expenses.</p>
           <div className="qualityManage">
-            {users.map((u) => (
+            {users.map((u) => {
+              const isActive = u.active !== false;
+              const isSelf = u.id === currentUser?.id;
+              const canDemote = u.role === 'admin' && activeAdminCount > 1;
+              return (
               <motion.div className="qualityManageRow" key={u.id}
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -2090,25 +2191,26 @@ function Setup({categories, rules, qualityLevels, qualityRecords, onCat, onRule,
                       color: u.role === 'admin' ? '#a855f7' : '#3b82f6',
                       fontSize: 11,
                       fontWeight: 600,
-                    }}>{u.role}</span>
-                    {(u as any).active === false && (
+                    }}>{u.role === 'admin' ? 'Admin' : 'Attendant'}</span>
+                    {!isActive && (
                       <span style={{ marginLeft: 6, padding: '1px 6px', borderRadius: 4,
                         background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444',
                         fontSize: 11, fontWeight: 600 }}>inactive</span>
                     )}
                   </small>
                 </span>
-                {(u as any).active !== false && u.id !== currentUser?.id && (
-                  <motion.button className="iconBtn danger"
-                    title="Deactivate"
-                    onClick={() => deactivateUserHandler(u.id, u.name)}
-                    whileHover={{ scale: 1.1 }}
-                    whileTap={{ scale: 0.9 }}>
-                    <X size={15}/>
-                  </motion.button>
+                {isActive && !isSelf && (
+                  <PersonRowMenu
+                    isAttendant={u.role === 'attendant'}
+                    canDemote={canDemote}
+                    onMakeAdmin={() => updateUserRoleHandler(u.id, u.name, 'admin')}
+                    onMakeAttendant={() => updateUserRoleHandler(u.id, u.name, 'attendant')}
+                    onRemove={() => deactivateUserHandler(u.id, u.name)}
+                  />
                 )}
               </motion.div>
-            ))}
+              );
+            })}
           </div>
         </motion.div>
       </motion.div>

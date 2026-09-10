@@ -108,21 +108,19 @@ export const objectStorage: ObjectStorage = {
     async url(paths: string[]): Promise<Array<{ path: string; url: string }>> {
         const client = getClient();
         const bucket = getBucket();
-        const results: Array<{ path: string; url: string }> = [];
-        for (const path of paths) {
+        return Promise.all(paths.map(async (path) => {
             try {
                 const command = new GetObjectCommand({
                     Bucket: bucket,
                     Key: path,
                 });
                 const url = await getSignedUrl(client, command, { expiresIn: SIGNED_URL_TTL_SECONDS });
-                results.push({ path, url });
+                return { path, url };
             } catch (e) {
                 console.error(`objectStorage.url failed for ${path}:`, e);
-                results.push({ path, url: '' });
+                return { path, url: '' };
             }
-        }
-        return results;
+        }));
     },
 
     async list(options?: { prefix?: string; nextToken?: string; limit?: number }): Promise<{ paths: string[]; nextToken?: string }> {
