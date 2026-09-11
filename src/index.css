@@ -300,6 +300,7 @@ body {
   flex: 1;
   margin-left: var(--sidebar-width);
   min-height: 100vh;
+  min-width: 0;
   background: var(--bg-primary);
   position: relative;
 }
@@ -1168,6 +1169,7 @@ button:focus-visible {
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   padding: 24px;
+  overflow: hidden;
 }
 
 .rolodexTop {
@@ -1202,6 +1204,7 @@ button:focus-visible {
   gap: 24px;
   min-height: 300px;
   perspective: 1200px;
+  overflow: hidden;
 }
 
 .rolodexCard {
@@ -1284,6 +1287,7 @@ button:focus-visible {
 .rolodexControls {
   display: flex;
   justify-content: center;
+  flex-wrap: wrap;
   gap: 12px;
   margin-top: 20px;
 }
@@ -1347,6 +1351,40 @@ button:focus-visible {
 .nextPanel button {
   margin-left: auto;
   flex-shrink: 0;
+}
+
+/* ============================================================
+   Stock / Sell page viewport
+   ============================================================ */
+.stockPage {
+  overflow-x: clip;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+
+.sellCatalog {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+
+.posLayout {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.posLayout > * {
+  min-width: 0;
+}
+
+.stockPage .categoryStrip,
+.sellCatalog .categoryStrip {
+  margin-left: 0;
+  margin-right: 0;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 /* ============================================================
@@ -2630,13 +2668,19 @@ button:focus-visible {
     grid-template-columns: 1fr;
   }
 
+  .sellCatalog {
+    padding-bottom: calc(min(50dvh, 50vh) + env(safe-area-inset-bottom, 0px) + 16px);
+  }
+
   .cart {
     position: fixed;
+    top: auto;
     bottom: 0;
     left: 0;
     right: 0;
     height: auto;
-    max-height: 50vh;
+    max-height: min(50dvh, 50vh);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
     border-left: none;
     border-top: 1px solid var(--border);
     z-index: 25;
@@ -2715,7 +2759,12 @@ button:focus-visible {
     margin: 12px 24px;
   }
 
-  .nextPanel {
+  .rolodexWrap {
+    margin: 16px 24px;
+  }
+
+  .nextPanel,
+  .nextPanel.compact {
     flex-direction: column;
     text-align: center;
     margin: 0 24px 16px;
@@ -2825,6 +2874,26 @@ button:focus-visible {
   }
 
   .search {
+    width: 100%;
+  }
+
+  .nextPanel,
+  .nextPanel.compact {
+    margin: 0 16px 16px;
+  }
+
+  .posLayout {
+    min-height: calc(100dvh - var(--mobile-header-height));
+  }
+
+  .cartPriceTools {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+  }
+
+  .cartPriceTools input {
+    grid-column: 1 / -1;
     width: 100%;
   }
 

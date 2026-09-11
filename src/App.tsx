@@ -896,19 +896,21 @@ export default function App() {
           )}
         </AnimatePresence>
 
-        {/* Quick Sell FAB */}
-        <motion.button
-          className={`quickSell ${cart.length > 0 ? 'hasItems' : ''}`}
-          onClick={() => go('sell')}
-          aria-label="Quick sell"
-          initial={{ y: 100, opacity: 0, scale: 0.8 }}
-          animate={{ y: 0, opacity: 1, scale: 1 }}
-          transition={{ ...bouncySpring, delay: 0.5 }}
-          whileHover={{ y: -4, scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
-        >
-          <ShoppingBag size={17}/><span>Quick sell</span>
-        </motion.button>
+        {/* Quick Sell FAB — hidden on Sell; header cart badge covers that tab */}
+        {tab !== 'sell' && (
+          <motion.button
+            className={`quickSell ${cart.length > 0 ? 'hasItems' : ''}`}
+            onClick={() => go('sell')}
+            aria-label="Quick sell"
+            initial={{ y: 100, opacity: 0, scale: 0.8 }}
+            animate={{ y: 0, opacity: 1, scale: 1 }}
+            transition={{ ...bouncySpring, delay: 0.5 }}
+            whileHover={{ y: -4, scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+          >
+            <ShoppingBag size={17}/><span>Quick sell</span>
+          </motion.button>
+        )}
 
         {/* Toast Stack */}
         <div className="toastStack">
@@ -1336,7 +1338,7 @@ function Stock({items, categories, bales, qualityLevels, onAdd, onEdit}: {
   );
 
   return (
-    <section>
+    <section className="stockPage">
       <PageHead eyebrow="STEP 2 · 5" title="Sort, classify & keep stock ready"
         text="Every physical piece lives here. Add pieces after a bale arrives; photos can be added whenever you are ready."
         action="Add piece" onClick={onAdd}/>
@@ -1491,7 +1493,7 @@ function POS({items, categories, qualityLevels, cart, setCart, onSale, checkout,
 
   return (
     <div className="posLayout">
-      <section>
+      <section className="sellCatalog">
         <PageHead eyebrow="STEP 6 · SELL" title="Choose pieces"
           text="Find the physical item, add it to the sale, then adjust the price if the customer bargains."/>
         <div className="filters">
